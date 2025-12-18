@@ -5,6 +5,8 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/ErvisPeng/LedgerKit/actions/workflows/ci.yml/badge.svg)](https://github.com/ErvisPeng/LedgerKit/actions/workflows/ci.yml)
 
+English | [繁體中文](README.zh-TW.md)
+
 A Swift library for parsing brokerage transaction data from various brokers into a unified format.
 
 ## Features

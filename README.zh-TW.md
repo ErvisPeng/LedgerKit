@@ -4,6 +4,7 @@
 [![Platforms](https://img.shields.io/badge/Platforms-iOS%2015+%20|%20macOS%2012+-blue.svg)](https://developer.apple.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/ErvisPeng/LedgerKit/actions/workflows/ci.yml/badge.svg)](https://github.com/ErvisPeng/LedgerKit/actions/workflows/ci.yml)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-贊助作者-orange?style=flat&logo=buy-me-a-coffee)](https://buymeacoffee.com/ervispeng)
 
 [English](README.md) | 繁體中文
 

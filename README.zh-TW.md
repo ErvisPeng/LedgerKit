@@ -214,7 +214,7 @@ do {
 3. 撰寫單元測試與範例資料
 4. 提交 Pull Request
 
-詳細說明請參閱 [CONTRIBUTING.md](CONTRIBUTING.md)。
+詳細說明請參閱 [CONTRIBUTING.zh-TW.md](CONTRIBUTING.zh-TW.md)。
 
 ## 系統需求
 
@@ -227,7 +227,7 @@ LedgerKit 使用 MIT 授權。詳情請參閱 [LICENSE](LICENSE) 檔案。
 
 ## 貢獻
 
-歡迎貢獻！提交 Pull Request 前請先閱讀 [CONTRIBUTING.md](CONTRIBUTING.md)。
+歡迎貢獻！提交 Pull Request 前請先閱讀 [CONTRIBUTING.zh-TW.md](CONTRIBUTING.zh-TW.md)。
 
 ## 致謝
 

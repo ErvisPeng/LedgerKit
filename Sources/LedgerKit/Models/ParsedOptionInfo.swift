@@ -57,6 +57,7 @@ public extension ParsedOptionInfo {
     var yahooSymbol: String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyMMdd"
+        dateFormatter.timeZone = TimeZone(identifier: "UTC")
         let dateString = dateFormatter.string(from: expirationDate)
 
         let strikeInt = Int(strikePrice * 1000)
@@ -72,6 +73,7 @@ public extension ParsedOptionInfo {
     var displaySymbol: String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "MM/dd/yy"
+        dateFormatter.timeZone = TimeZone(identifier: "UTC")
         let dateString = dateFormatter.string(from: expirationDate)
 
         let strikeString: String

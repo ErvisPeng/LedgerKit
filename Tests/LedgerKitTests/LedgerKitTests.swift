@@ -46,7 +46,8 @@ struct LedgerKitTests {
 
     @Test("ParsedOptionInfo generates correct Yahoo symbol")
     func optionInfoYahooSymbol() {
-        let calendar = Calendar(identifier: .gregorian)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
         let components = DateComponents(year: 2025, month: 12, day: 19)
         let expirationDate = calendar.date(from: components)!
 

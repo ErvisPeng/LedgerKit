@@ -294,9 +294,32 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                     )
                 }
 
+                // W-8 Withholding (TDA TRAN - W-8 WITHHOLDING)
+                // These have non-zero amount and should be imported as taxWithholding
+                if descUpper.contains("W-8 WITHHOLDING") && abs(amount) > 0 {
+                    // Extract symbol from description like "W-8 WITHHOLDING (NVDA)"
+                    var symbol = ""
+                    if let openParen = record.description.range(of: "("),
+                       let closeParen = record.description.range(of: ")") {
+                        symbol = String(record.description[openParen.upperBound..<closeParen.lowerBound])
+                    }
+
+                    return ParsedTrade(
+                        type: .taxWithholding,
+                        ticker: symbol.uppercased(),
+                        quantity: 0,
+                        price: 0,
+                        totalAmount: abs(amount),
+                        tradeDate: parsedDate,
+                        optionInfo: nil,
+                        note: "\(record.action): \(record.description)",
+                        rawSource: "Charles Schwab"
+                    )
+                }
+
                 // Symbol exchange (SPAC mergers, etc.)
                 guard descUpper.contains("EXCHANGE") else {
-                    return nil  // Not exchange or split, skip
+                    return nil  // Not exchange, split, or withholding - skip
                 }
             }
 

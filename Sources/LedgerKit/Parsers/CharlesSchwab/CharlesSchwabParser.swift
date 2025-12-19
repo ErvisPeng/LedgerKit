@@ -328,6 +328,75 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             )
         }
 
+        // Cash transfers (deposits/withdraws)
+        if actionType == .moneyLinkDeposit || actionType == .moneyLinkTransfer {
+            // Determine deposit vs withdraw based on amount sign
+            let tradeType: ParsedTradeType = amount >= 0 ? .deposit : .withdraw
+
+            return ParsedTrade(
+                type: tradeType,
+                ticker: "",  // No symbol for cash transfers
+                quantity: 0,
+                price: 0,
+                totalAmount: abs(amount),
+                tradeDate: parsedDate,
+                optionInfo: nil,
+                note: "\(record.action): \(record.description)",
+                rawSource: "Charles Schwab"
+            )
+        }
+
+        // Interest income (Bond Interest, Credit Interest)
+        if actionType == .bondInterest || actionType == .creditInterest {
+            guard abs(amount) > 0 else { return nil }  // Skip zero-amount records
+
+            return ParsedTrade(
+                type: .interestIncome,
+                ticker: "",  // No symbol for interest
+                quantity: 0,
+                price: 0,
+                totalAmount: abs(amount),
+                tradeDate: parsedDate,
+                optionInfo: nil,
+                note: "\(record.action): \(record.description)",
+                rawSource: "Charles Schwab"
+            )
+        }
+
+        // Tax withholding (NRA Tax Adj)
+        if actionType == .nraTaxAdj {
+            guard abs(amount) > 0 else { return nil }  // Skip zero-amount records
+
+            return ParsedTrade(
+                type: .taxWithholding,
+                ticker: record.symbol.trimmingCharacters(in: .whitespaces),  // Keep related symbol
+                quantity: 0,
+                price: 0,
+                totalAmount: abs(amount),
+                tradeDate: parsedDate,
+                optionInfo: nil,
+                note: "\(record.action): \(record.description)",
+                rawSource: "Charles Schwab"
+            )
+        }
+
+        // Dividend reinvest
+        if actionType == .qualDivReinvest || actionType == .reinvestDividend {
+            let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
+
+            return ParsedTrade(
+                type: .dividendReinvest,
+                ticker: symbol.uppercased(),
+                quantity: abs(quantity),
+                price: price,
+                totalAmount: abs(amount),
+                tradeDate: parsedDate,
+                optionInfo: nil,
+                note: "\(record.action): \(record.description)",
+                rawSource: "Charles Schwab"
+            )
+        }
+
         // Stock trades (including Reinvest Shares)
         var symbol = record.symbol.trimmingCharacters(in: .whitespaces)
         guard !symbol.isEmpty else { return nil }

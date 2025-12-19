@@ -37,6 +37,7 @@ public enum CharlesSchwabActionType: String, Sendable, CaseIterable {
     case cashInLieu = "Cash In Lieu"
     case internalTransfer = "Internal Transfer"
     case moneyLinkDeposit = "MoneyLink Deposit"
+    case moneyLinkTransfer = "MoneyLink Transfer"
     case creditInterest = "Credit Interest"
     case bondInterest = "Bond Interest"
     case interestAdj = "Interest Adj"
@@ -55,9 +56,11 @@ public enum CharlesSchwabActionType: String, Sendable, CaseIterable {
         switch self {
         case .buy, .sell,
              .buyToOpen, .sellToOpen, .buyToClose, .sellToClose,
-             .cashDividend, .qualifiedDividend, .reinvestShares, .longTermCapGain,
+             .cashDividend, .qualifiedDividend, .qualDivReinvest, .reinvestDividend, .reinvestShares, .longTermCapGain,
              .stockSplit,
-             .deliveredOther, .receivedOther, .journaledShares, .mandatoryReorgExc:
+             .deliveredOther, .receivedOther, .journaledShares, .mandatoryReorgExc,
+             .moneyLinkDeposit, .moneyLinkTransfer,
+             .nraTaxAdj, .bondInterest, .creditInterest:
             return true
         default:
             return false
@@ -151,6 +154,15 @@ public enum CharlesSchwabActionType: String, Sendable, CaseIterable {
             return .optionSellToClose
         case .cashDividend, .qualifiedDividend, .longTermCapGain:
             return .dividend
+        case .qualDivReinvest, .reinvestDividend:
+            return .dividendReinvest
+        case .moneyLinkDeposit, .moneyLinkTransfer:
+            // Note: Caller should check amount to determine deposit vs withdraw
+            return .deposit
+        case .bondInterest, .creditInterest:
+            return .interestIncome
+        case .nraTaxAdj:
+            return .taxWithholding
         default:
             return nil
         }

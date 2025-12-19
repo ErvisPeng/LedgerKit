@@ -26,6 +26,14 @@ public enum ParsedTradeType: String, Sendable, CaseIterable, Codable {
     case optionExpiration = "option_expiration"
     case optionAssignment = "option_assignment"
 
+    // Cash transfer types
+    case deposit = "deposit"
+    case withdraw = "withdraw"
+
+    // Other income/expense types
+    case interestIncome = "interest_income"
+    case taxWithholding = "tax_withholding"
+
     /// Whether this trade type represents a buy action.
     public var isBuy: Bool {
         switch self {
@@ -77,6 +85,16 @@ public enum ParsedTradeType: String, Sendable, CaseIterable, Codable {
         }
     }
 
+    /// Whether this trade type is a cash transfer.
+    public var isCashTransfer: Bool {
+        switch self {
+        case .deposit, .withdraw:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// A human-readable display name for the trade type.
     public var displayName: String {
         switch self {
@@ -94,6 +112,10 @@ public enum ParsedTradeType: String, Sendable, CaseIterable, Codable {
         case .symbolExchangeIn: return "Exchange In"
         case .optionExpiration: return "Option Expired"
         case .optionAssignment: return "Option Assigned"
+        case .deposit: return "Deposit"
+        case .withdraw: return "Withdraw"
+        case .interestIncome: return "Interest Income"
+        case .taxWithholding: return "Tax Withholding"
         }
     }
 }

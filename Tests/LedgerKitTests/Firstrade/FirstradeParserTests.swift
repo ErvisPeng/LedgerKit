@@ -85,9 +85,9 @@ struct FirstradeParserTests {
         let trade = trades[0]
         #expect(trade.type == .stockBuy)
         #expect(trade.ticker == "AAPL")
-        #expect(trade.quantity == 100.0)
-        #expect(trade.price == 150.50)
-        #expect(trade.totalAmount == 15050.00)
+        #expect(trade.quantity == 100)
+        #expect(trade.price == Decimal(string: "150.50"))
+        #expect(trade.totalAmount == Decimal(string: "15050.00"))
         #expect(trade.optionInfo == nil)
     }
 
@@ -104,8 +104,8 @@ struct FirstradeParserTests {
         let trade = trades[0]
         #expect(trade.type == .stockSell)
         #expect(trade.ticker == "AAPL")
-        #expect(trade.quantity == 50.0)
-        #expect(trade.price == 155.00)
+        #expect(trade.quantity == 50)
+        #expect(trade.price == 155)
     }
 
     // MARK: - Option Trade Parsing Tests
@@ -123,11 +123,11 @@ struct FirstradeParserTests {
         let trade = trades[0]
         #expect(trade.type == .optionBuyToOpen)
         #expect(trade.ticker == "AAPL")
-        #expect(trade.quantity == 1.0)
-        #expect(trade.price == 5.50)
+        #expect(trade.quantity == 1)
+        #expect(trade.price == Decimal(string: "5.50"))
         #expect(trade.optionInfo != nil)
         #expect(trade.optionInfo?.optionType == .call)
-        #expect(trade.optionInfo?.strikePrice == 150.0)
+        #expect(trade.optionInfo?.strikePrice == 150)
         #expect(trade.optionInfo?.underlyingTicker == "AAPL")
     }
 
@@ -144,10 +144,10 @@ struct FirstradeParserTests {
         let trade = trades[0]
         #expect(trade.type == .optionSellToOpen)
         #expect(trade.ticker == "HIMS")
-        #expect(trade.quantity == 1.0)
+        #expect(trade.quantity == 1)
         #expect(trade.optionInfo != nil)
         #expect(trade.optionInfo?.optionType == .put)
-        #expect(trade.optionInfo?.strikePrice == 45.0)
+        #expect(trade.optionInfo?.strikePrice == 45)
     }
 
     // MARK: - Dividend Parsing Tests
@@ -165,9 +165,59 @@ struct FirstradeParserTests {
         let trade = trades[0]
         #expect(trade.type == .dividend)
         #expect(trade.ticker == "PAGS")
-        #expect(trade.totalAmount == 12.00)
+        #expect(trade.totalAmount == 12)
         #expect(trade.quantity == 0)
         #expect(trade.price == 0)
+        #expect(trade.dividendInfo != nil)
+        #expect(trade.dividendInfo?.grossAmount == 12)
+        #expect(trade.dividendInfo?.taxWithheld == 0)
+    }
+
+    @Test("Dividend with tax withheld is parsed correctly")
+    func dividendWithTaxWithheldParsed() throws {
+        let dividendWithTaxRecord = """
+            KO,0.00,,Dividend,***COCA COLA COMPANY CASH DIV  ON     100 SHS REC DATE 12/01/25 PAY DATE 12/15/25 NON-RES TAX WITHHELD $1.58,2025-12-15,2025-12-15,0.00,9.00,0.00,0.00,191216100,Financial
+            """
+        let csv = "\(validCSVHeader)\n\(dividendWithTaxRecord)"
+        let data = csv.data(using: .utf8)!
+
+        let records = try parser.parseCSV(data)
+        let trades = parser.extractTrades(from: records)
+
+        #expect(trades.count == 1)
+
+        let trade = trades[0]
+        #expect(trade.type == .dividend)
+        #expect(trade.ticker == "KO")
+        #expect(trade.totalAmount == 9)
+        #expect(trade.dividendInfo != nil)
+        #expect(trade.dividendInfo?.grossAmount == Decimal(string: "10.58"))
+        #expect(trade.dividendInfo?.taxWithheld == Decimal(string: "1.58"))
+        #expect(trade.dividendInfo?.netAmount == 9)
+    }
+
+    // MARK: - ADR Fee Parsing Tests
+
+    @Test("ADR Fee is parsed as fee type")
+    func adrFeeParsed() throws {
+        let adrFeeRecord = """
+            ARM,0.00,,Other,***ARM HOLDINGS PLC SPONSORED ADS ADR FEE ON 50 SHS,2025-11-06,2025-11-06,0.00,-1.25,0.00,0.00,042068104,Financial
+            """
+        let csv = "\(validCSVHeader)\n\(adrFeeRecord)"
+        let data = csv.data(using: .utf8)!
+
+        let records = try parser.parseCSV(data)
+        let trades = parser.extractTrades(from: records)
+
+        #expect(trades.count == 1)
+
+        let trade = trades[0]
+        #expect(trade.type == .fee)
+        #expect(trade.ticker == "ARM")
+        #expect(trade.totalAmount == Decimal(string: "1.25"))
+        #expect(trade.feeInfo != nil)
+        #expect(trade.feeInfo?.type == .adrManagementFee)
+        #expect(trade.feeInfo?.amount == Decimal(string: "1.25"))
     }
 
     // MARK: - Non-Trade Record Tests
@@ -194,7 +244,7 @@ struct FirstradeParserTests {
         #expect(optionInfo != nil)
         #expect(optionInfo?.optionType == .call)
         #expect(optionInfo?.underlyingTicker == "AAPL")
-        #expect(optionInfo?.strikePrice == 150.0)
+        #expect(optionInfo?.strikePrice == 150)
     }
 
     @Test("Put option description is parsed correctly")
@@ -205,7 +255,7 @@ struct FirstradeParserTests {
         #expect(optionInfo != nil)
         #expect(optionInfo?.optionType == .put)
         #expect(optionInfo?.underlyingTicker == "HIMS")
-        #expect(optionInfo?.strikePrice == 45.0)
+        #expect(optionInfo?.strikePrice == 45)
     }
 
     @Test("Option description with decimal strike price is parsed")
@@ -214,7 +264,7 @@ struct FirstradeParserTests {
         let optionInfo = parser.parseOptionDescription(description)
 
         #expect(optionInfo != nil)
-        #expect(optionInfo?.strikePrice == 5.50)
+        #expect(optionInfo?.strikePrice == Decimal(string: "5.50"))
     }
 
     @Test("Invalid option description returns nil")

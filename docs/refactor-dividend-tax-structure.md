@@ -426,19 +426,90 @@ func decimalPrecision() throws {
 
 ---
 
-## 七、待確認問題
+## 七、向後相容策略
+
+### 7.1 Double → Decimal 相容
+
+保留 Double 版本的 computed properties，標記為 deprecated：
+
+```swift
+public struct ParsedTrade {
+    // 新的 Decimal 屬性
+    public let quantity: Decimal
+    public let price: Decimal
+    public let totalAmount: Decimal
+
+    // 向後相容：deprecated Double 屬性
+    @available(*, deprecated, message: "Use quantity (Decimal) instead")
+    public var quantityDouble: Double {
+        NSDecimalNumber(decimal: quantity).doubleValue
+    }
+
+    @available(*, deprecated, message: "Use price (Decimal) instead")
+    public var priceDouble: Double {
+        NSDecimalNumber(decimal: price).doubleValue
+    }
+
+    @available(*, deprecated, message: "Use totalAmount (Decimal) instead")
+    public var totalAmountDouble: Double {
+        NSDecimalNumber(decimal: totalAmount).doubleValue
+    }
+}
+```
+
+### 7.2 Codable 相容
+
+自定義 Codable 實作，支援讀取舊格式（Double）和新格式（Decimal）：
+
+```swift
+extension ParsedTrade: Codable {
+    enum CodingKeys: String, CodingKey {
+        case quantity, price, totalAmount
+        // ...
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        // 嘗試解碼為 Decimal，失敗則嘗試 Double 並轉換
+        if let decimal = try? container.decode(Decimal.self, forKey: .quantity) {
+            self.quantity = decimal
+        } else {
+            let double = try container.decode(Double.self, forKey: .quantity)
+            self.quantity = Decimal(double)
+        }
+        // ... 其他欄位同理
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        // 總是編碼為 Decimal（新格式）
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(quantity, forKey: .quantity)
+        // ...
+    }
+}
+```
+
+### 7.3 新增欄位相容
+
+新增的 optional 欄位自動向後相容：
+
+```swift
+public let dividendInfo: DividendInfo?  // nil = 舊資料
+public let feeInfo: FeeInfo?            // nil = 舊資料
+```
+
+---
+
+## 八、待確認問題
 
 1. **Firstrade 是否有類似的稅金記錄？**
    - 需要確認 Firstrade 的資料格式
    - 如果有，需要同步更新 FirstradeParser
 
-2. **是否需要向後相容？**
-   - 如果有序列化的資料，Decimal 的 Codable 格式可能不同
-   - 建議：這是 library，使用者應該重新解析原始資料
-
 ---
 
-## 八、預期結果
+## 九、預期結果
 
 重構完成後：
 

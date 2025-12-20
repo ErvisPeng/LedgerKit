@@ -11,6 +11,7 @@
 
 ### 1.2 範例資料
 
+**股息 + 稅金（同一 ItemIssueId）：**
 ```json
 {
   "Date": "06/28/2024",
@@ -32,17 +33,42 @@
 
 這兩筆記錄有相同的 `ItemIssueId`，應該合併為一筆股息記錄。
 
+**ADR 管理費（獨立記錄）：**
+```json
+{
+  "Date": "10/11/2022",
+  "Action": "ADR Mgmt Fee",
+  "Symbol": "",
+  "Description": "TDA TRAN - ADR FEE (SE)",
+  "Amount": "-$0.08",
+  "ItemIssueId": "0"
+}
+```
+
+Symbol 為空，但可從 Description 解析出股票代號 `SE`。應作為獨立的 `fee` 類型記錄。
+
 ### 1.3 目標
 
 - 配息記錄包含預扣稅金資訊（淨額 = 股息 - 稅金）
+- ADR 管理費作為獨立的 `fee` 類型記錄
 - 使用 `Decimal` 確保金額精確
-- 使用 enum + associated values 讓不同交易類型有明確的資料結構
 
 ---
 
 ## 二、新資料結構設計
 
-### 2.1 新增 `DividendInfo` 結構
+### 2.1 修改 `ParsedTradeType`
+
+```swift
+public enum ParsedTradeType: String, Sendable, CaseIterable, Codable {
+    // ... 現有 cases
+
+    // 新增
+    case fee = "fee"  // ADR 管理費等費用
+}
+```
+
+### 2.2 新增 `DividendInfo` 結構
 
 ```swift
 /// 股息資訊（含稅金）
@@ -67,7 +93,22 @@ public struct DividendInfo: Sendable, Equatable, Hashable, Codable {
 }
 ```
 
-### 2.2 修改 `ParsedTrade`
+### 2.3 新增 `FeeInfo` 結構
+
+```swift
+/// 費用資訊
+public struct FeeInfo: Sendable, Equatable, Hashable, Codable {
+    /// 費用類型
+    public enum FeeType: String, Sendable, Codable {
+        case adrMgmtFee = "adr_mgmt_fee"  // ADR 管理費
+    }
+
+    public let type: FeeType
+    public let amount: Decimal  // 費用金額（正數）
+}
+```
+
+### 2.4 修改 `ParsedTrade`
 
 ```swift
 public struct ParsedTrade: Sendable, Identifiable, Equatable, Hashable {
@@ -80,12 +121,13 @@ public struct ParsedTrade: Sendable, Identifiable, Equatable, Hashable {
     public let tradeDate: Date
     public let optionInfo: ParsedOptionInfo?
     public let dividendInfo: DividendInfo?  // 新增：股息專用資訊
+    public let feeInfo: FeeInfo?            // 新增：費用專用資訊
     public let note: String
     public let rawSource: String
 }
 ```
 
-### 2.3 修改 `ParsedOptionInfo`
+### 2.5 修改 `ParsedOptionInfo`
 
 ```swift
 public struct ParsedOptionInfo: Sendable, Equatable, Hashable, Codable {
@@ -96,7 +138,7 @@ public struct ParsedOptionInfo: Sendable, Equatable, Hashable, Codable {
 }
 ```
 
-### 2.4 修改 `FirstradeCSVRecord`
+### 2.6 修改 `FirstradeCSVRecord`
 
 ```swift
 public struct FirstradeCSVRecord: Sendable, Equatable {
@@ -179,7 +221,48 @@ private func tryMergeDividendWithTax(
 }
 ```
 
-### 3.2 金額解析改用 Decimal
+### 3.2 ADR Mgmt Fee 解析
+
+```swift
+private func parseADRFee(_ record: CharlesSchwabRawTransaction) -> ParsedTrade? {
+    guard record.action == "ADR Mgmt Fee" else { return nil }
+
+    // 從 Description 解析股票代號，例如 "TDA TRAN - ADR FEE (SE)" → "SE"
+    let symbol = parseSymbolFromDescription(record.description)
+    guard let symbol = symbol, !symbol.isEmpty else { return nil }
+
+    let amount = abs(parseAmount(record.amount))
+
+    return ParsedTrade(
+        type: .fee,
+        ticker: symbol,
+        quantity: .zero,
+        price: .zero,
+        totalAmount: amount,
+        tradeDate: parseDate(record.date),
+        feeInfo: FeeInfo(type: .adrMgmtFee, amount: amount),
+        note: record.description,
+        rawSource: "Charles Schwab"
+    )
+}
+
+/// 從 Description 解析股票代號
+/// 例如 "TDA TRAN - ADR FEE (SE)" → "SE"
+private func parseSymbolFromDescription(_ description: String) -> String? {
+    let pattern = #"\(([A-Z]+)\)$"#
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+          let match = regex.firstMatch(
+              in: description,
+              range: NSRange(description.startIndex..., in: description)
+          ),
+          let range = Range(match.range(at: 1), in: description) else {
+        return nil
+    }
+    return String(description[range])
+}
+```
+
+### 3.3 金額解析改用 Decimal
 
 ```swift
 // 舊
@@ -201,21 +284,25 @@ private func parseAmount(_ string: String) -> Decimal {
 
 | 檔案 | 修改內容 |
 |------|----------|
-| `Models/ParsedTrade.swift` | Double → Decimal, 新增 dividendInfo |
+| `Models/ParsedTrade.swift` | Double → Decimal, 新增 dividendInfo, feeInfo |
+| `Models/ParsedTradeType.swift` | 新增 `fee` case |
 | `Models/ParsedOptionInfo.swift` | strikePrice: Double → Decimal |
 | `Models/DividendInfo.swift` | **新建**：股息資訊結構 |
-| `Parsers/CharlesSchwab/CharlesSchwabParser.swift` | Decimal 解析 + 分組合併邏輯 |
-| `Parsers/CharlesSchwab/CharlesSchwabActionType.swift` | 加入 `nraTaxAdj` 到處理流程 |
+| `Models/FeeInfo.swift` | **新建**：費用資訊結構 |
+| `Parsers/CharlesSchwab/CharlesSchwabParser.swift` | Decimal 解析 + 分組合併 + ADR Fee 解析 |
+| `Parsers/CharlesSchwab/CharlesSchwabActionType.swift` | 加入 `nraTaxAdj`, `adrMgmtFee` 到處理流程 |
 | `Parsers/Firstrade/FirstradeParser.swift` | Decimal 解析 |
 | `Parsers/Firstrade/FirstradeCSVRecord.swift` | Double → Decimal |
-| `Tests/CharlesSchwabParserTests.swift` | 更新測試 + 新增合併測試 |
+| `Tests/CharlesSchwabParserTests.swift` | 更新測試 + 新增合併測試 + ADR Fee 測試 |
 | `Tests/FirstradeParserTests.swift` | 更新測試 |
 
 ### 4.2 公開 API 變更（Breaking Changes）
 
 1. `ParsedTrade.quantity/price/totalAmount` 從 `Double` 改為 `Decimal`
 2. `ParsedTrade` 新增 `dividendInfo: DividendInfo?` 欄位
-3. `ParsedOptionInfo.strikePrice` 從 `Double` 改為 `Decimal`
+3. `ParsedTrade` 新增 `feeInfo: FeeInfo?` 欄位
+4. `ParsedTradeType` 新增 `fee` case
+5. `ParsedOptionInfo.strikePrice` 從 `Double` 改為 `Decimal`
 
 ---
 
@@ -224,21 +311,24 @@ private func parseAmount(_ string: String) -> Decimal {
 ### Phase 1：基礎結構變更
 
 1. 新建 `DividendInfo.swift`
-2. 修改 `ParsedTrade.swift`（加入 dividendInfo，Double → Decimal）
-3. 修改 `ParsedOptionInfo.swift`（Double → Decimal）
-4. 修改 `FirstradeCSVRecord.swift`（Double → Decimal）
+2. 新建 `FeeInfo.swift`
+3. 修改 `ParsedTradeType.swift`（新增 `fee` case）
+4. 修改 `ParsedTrade.swift`（加入 dividendInfo, feeInfo，Double → Decimal）
+5. 修改 `ParsedOptionInfo.swift`（Double → Decimal）
+6. 修改 `FirstradeCSVRecord.swift`（Double → Decimal）
 
 ### Phase 2：解析器更新
 
-5. 修改 `CharlesSchwabParser.swift`（Decimal + 分組合併）
-6. 修改 `CharlesSchwabActionType.swift`（調整 shouldImport）
-7. 修改 `FirstradeParser.swift`（Decimal）
+7. 修改 `CharlesSchwabParser.swift`（Decimal + 分組合併 + ADR Fee 解析）
+8. 修改 `CharlesSchwabActionType.swift`（調整 shouldImport）
+9. 修改 `FirstradeParser.swift`（Decimal）
 
 ### Phase 3：測試更新
 
-8. 更新 `CharlesSchwabParserTests.swift`
-9. 更新 `FirstradeParserTests.swift`
-10. 新增股息+稅金合併的測試案例
+10. 更新 `CharlesSchwabParserTests.swift`
+11. 更新 `FirstradeParserTests.swift`
+12. 新增股息+稅金合併的測試案例
+13. 新增 ADR Fee 解析的測試案例
 
 ---
 
@@ -297,7 +387,32 @@ func dividendWithoutTax() throws {
 }
 ```
 
-### 6.3 Decimal 精度測試
+### 6.3 ADR Fee 解析測試
+
+```swift
+@Test("ADR Mgmt Fee parsed correctly")
+func adrMgmtFeeParsed() throws {
+    let transactions = [
+        makeTransaction(
+            action: "ADR Mgmt Fee",
+            symbol: "",
+            description: "TDA TRAN - ADR FEE (SE)",
+            amount: "-$0.08",
+            itemIssueId: "0"
+        )
+    ]
+
+    let trades = try parser.parse(makeJSONData(transactions: transactions))
+
+    #expect(trades.count == 1)
+    #expect(trades[0].type == .fee)
+    #expect(trades[0].ticker == "SE")
+    #expect(trades[0].totalAmount == Decimal(string: "0.08"))
+    #expect(trades[0].feeInfo?.type == .adrMgmtFee)
+}
+```
+
+### 6.4 Decimal 精度測試
 
 ```swift
 @Test("Decimal precision maintained")
@@ -313,15 +428,11 @@ func decimalPrecision() throws {
 
 ## 七、待確認問題
 
-1. **ADR Mgmt Fee 是否也要合併？**
-   - 目前也被跳過，是否要類似處理？
-   - 建議：可以加入 `DividendInfo` 的 `fees` 欄位
-
-2. **Firstrade 是否有類似的稅金記錄？**
+1. **Firstrade 是否有類似的稅金記錄？**
    - 需要確認 Firstrade 的資料格式
    - 如果有，需要同步更新 FirstradeParser
 
-3. **是否需要向後相容？**
+2. **是否需要向後相容？**
    - 如果有序列化的資料，Decimal 的 Codable 格式可能不同
    - 建議：這是 library，使用者應該重新解析原始資料
 

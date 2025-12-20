@@ -19,7 +19,7 @@ public enum OptionType: String, Sendable, Codable, CaseIterable {
 // MARK: - ParsedOptionInfo
 
 /// Information about an options contract.
-public struct ParsedOptionInfo: Sendable, Equatable, Hashable, Codable {
+public struct ParsedOptionInfo: Sendable, Equatable, Hashable {
     /// The underlying stock ticker (e.g., "AAPL").
     public let underlyingTicker: String
 
@@ -27,7 +27,7 @@ public struct ParsedOptionInfo: Sendable, Equatable, Hashable, Codable {
     public let optionType: OptionType
 
     /// The strike price of the option.
-    public let strikePrice: Double
+    public let strikePrice: Decimal
 
     /// The expiration date of the option.
     public let expirationDate: Date
@@ -36,7 +36,7 @@ public struct ParsedOptionInfo: Sendable, Equatable, Hashable, Codable {
     public init(
         underlyingTicker: String,
         optionType: OptionType,
-        strikePrice: Double,
+        strikePrice: Decimal,
         expirationDate: Date
     ) {
         self.underlyingTicker = underlyingTicker
@@ -60,7 +60,8 @@ public extension ParsedOptionInfo {
         dateFormatter.timeZone = TimeZone(identifier: "UTC")
         let dateString = dateFormatter.string(from: expirationDate)
 
-        let strikeInt = Int(strikePrice * 1000)
+        let strikeDouble = NSDecimalNumber(decimal: strikePrice).doubleValue
+        let strikeInt = Int(strikeDouble * 1000)
         let strikeString = String(format: "%08d", strikeInt)
 
         return "\(underlyingTicker)\(dateString)\(optionType.rawValue)\(strikeString)"
@@ -76,13 +77,57 @@ public extension ParsedOptionInfo {
         dateFormatter.timeZone = TimeZone(identifier: "UTC")
         let dateString = dateFormatter.string(from: expirationDate)
 
+        let strikeDouble = NSDecimalNumber(decimal: strikePrice).doubleValue
         let strikeString: String
-        if strikePrice.truncatingRemainder(dividingBy: 1) == 0 {
-            strikeString = String(format: "%.0f", strikePrice)
+        if strikeDouble.truncatingRemainder(dividingBy: 1) == 0 {
+            strikeString = String(format: "%.0f", strikeDouble)
         } else {
-            strikeString = String(format: "%.2f", strikePrice)
+            strikeString = String(format: "%.2f", strikeDouble)
         }
 
         return "\(underlyingTicker) \(dateString) $\(strikeString) \(optionType.displayName)"
+    }
+
+    /// Backward compatible strikePrice as Double.
+    @available(*, deprecated, message: "Use strikePrice (Decimal) instead")
+    var strikePriceDouble: Double {
+        NSDecimalNumber(decimal: strikePrice).doubleValue
+    }
+}
+
+// MARK: - Codable
+
+extension ParsedOptionInfo: Codable {
+    enum CodingKeys: String, CodingKey {
+        case underlyingTicker
+        case optionType
+        case strikePrice
+        case expirationDate
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        underlyingTicker = try container.decode(String.self, forKey: .underlyingTicker)
+        optionType = try container.decode(OptionType.self, forKey: .optionType)
+
+        // Support both Decimal and Double for backward compatibility
+        if let decimal = try? container.decode(Decimal.self, forKey: .strikePrice) {
+            strikePrice = decimal
+        } else {
+            let double = try container.decode(Double.self, forKey: .strikePrice)
+            strikePrice = Decimal(double)
+        }
+
+        expirationDate = try container.decode(Date.self, forKey: .expirationDate)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+
+        try container.encode(underlyingTicker, forKey: .underlyingTicker)
+        try container.encode(optionType, forKey: .optionType)
+        try container.encode(strikePrice, forKey: .strikePrice)
+        try container.encode(expirationDate, forKey: .expirationDate)
     }
 }

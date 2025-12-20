@@ -8,10 +8,10 @@ public struct FirstradeCSVRecord: Sendable, Equatable {
     public let symbol: String
 
     /// Quantity of shares/contracts (negative for sells)
-    public let quantity: Double
+    public let quantity: Decimal
 
     /// Price per share/contract
-    public let price: Double
+    public let price: Decimal
 
     /// Action type: BUY, SELL, Dividend, Other
     public let action: String
@@ -26,16 +26,16 @@ public struct FirstradeCSVRecord: Sendable, Equatable {
     public let settledDate: Date
 
     /// Interest amount
-    public let interest: Double
+    public let interest: Decimal
 
     /// Total transaction amount
-    public let amount: Double
+    public let amount: Decimal
 
     /// Commission charged
-    public let commission: Double
+    public let commission: Decimal
 
     /// Fee charged
-    public let fee: Double
+    public let fee: Decimal
 
     /// CUSIP identifier
     public let cusip: String
@@ -45,16 +45,16 @@ public struct FirstradeCSVRecord: Sendable, Equatable {
 
     public init(
         symbol: String,
-        quantity: Double,
-        price: Double,
+        quantity: Decimal,
+        price: Decimal,
         action: String,
         description: String,
         tradeDate: Date,
         settledDate: Date,
-        interest: Double,
-        amount: Double,
-        commission: Double,
-        fee: Double,
+        interest: Decimal,
+        amount: Decimal,
+        commission: Decimal,
+        fee: Decimal,
         cusip: String,
         recordType: String
     ) {

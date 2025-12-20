@@ -22,7 +22,7 @@ public enum CharlesSchwabActionType: String, Sendable, CaseIterable {
     case reinvestShares = "Reinvest Shares"
     case longTermCapGain = "Long Term Cap Gain"
 
-    // Tax/Fees (skip)
+    // Tax/Fees (handled specially in parser)
     case nraTaxAdj = "NRA Tax Adj"
     case adrMgmtFee = "ADR Mgmt Fee"
 

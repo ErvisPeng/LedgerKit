@@ -143,16 +143,16 @@ public final class FirstradeParser: BrokerParser, Sendable {
         }
 
         let symbol = fields[0].trimmingCharacters(in: .whitespaces)
-        let quantity = Double(fields[1].trimmingCharacters(in: .whitespaces)) ?? 0
-        let price = Double(fields[2].trimmingCharacters(in: .whitespaces)) ?? 0
+        let quantity = Decimal(string: fields[1].trimmingCharacters(in: .whitespaces)) ?? .zero
+        let price = Decimal(string: fields[2].trimmingCharacters(in: .whitespaces)) ?? .zero
         let action = fields[3].trimmingCharacters(in: .whitespaces)
         let description = fields[4].trimmingCharacters(in: .whitespaces)
         let tradeDateStr = fields[5].trimmingCharacters(in: .whitespaces)
         let settledDateStr = fields[6].trimmingCharacters(in: .whitespaces)
-        let interest = Double(fields[7].trimmingCharacters(in: .whitespaces)) ?? 0
-        let amount = Double(fields[8].trimmingCharacters(in: .whitespaces)) ?? 0
-        let commission = Double(fields[9].trimmingCharacters(in: .whitespaces)) ?? 0
-        let fee = Double(fields[10].trimmingCharacters(in: .whitespaces)) ?? 0
+        let interest = Decimal(string: fields[7].trimmingCharacters(in: .whitespaces)) ?? .zero
+        let amount = Decimal(string: fields[8].trimmingCharacters(in: .whitespaces)) ?? .zero
+        let commission = Decimal(string: fields[9].trimmingCharacters(in: .whitespaces)) ?? .zero
+        let fee = Decimal(string: fields[10].trimmingCharacters(in: .whitespaces)) ?? .zero
         let cusip = fields[11].trimmingCharacters(in: .whitespaces)
         let recordType = fields[12].trimmingCharacters(in: .whitespaces)
 
@@ -205,34 +205,28 @@ public final class FirstradeParser: BrokerParser, Sendable {
         let actionUpper = record.action.uppercased()
         let descriptionUpper = record.description.uppercased()
 
-        // 1. Dividend records
-        if record.recordType == "Financial" && actionUpper == "DIVIDEND" {
-            let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
-            guard !symbol.isEmpty else { return nil }
-
-            return ParsedTrade(
-                type: .dividend,
-                ticker: symbol,
-                quantity: 0,
-                price: 0,
-                totalAmount: abs(record.amount),
-                tradeDate: record.tradeDate,
-                optionInfo: nil,
-                note: record.description,
-                rawSource: "Firstrade"
-            )
+        // 1. ADR Fee
+        // Format: Action=Other, RecordType=Financial, Description contains "ADR FEE"
+        if record.recordType == "Financial" && actionUpper == "OTHER" &&
+           descriptionUpper.contains("ADR FEE") {
+            return parseADRFee(record)
         }
 
-        // 2. Dividend Reinvestment (DRIP)
+        // 2. Dividend records
+        if record.recordType == "Financial" && actionUpper == "DIVIDEND" {
+            return parseDividend(record)
+        }
+
+        // 3. Dividend Reinvestment (DRIP)
         // Format: Action=Other, RecordType=Financial, Description contains "REIN @"
         if record.recordType == "Financial" && actionUpper == "OTHER" &&
            descriptionUpper.contains("REIN @") {
             let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
             guard !symbol.isEmpty else { return nil }
-            guard record.quantity > 0 else { return nil }
+            guard record.quantity > .zero else { return nil }
 
             // Parse reinvestment price from description
-            let price = parseReinvestmentPrice(record.description) ?? 0
+            let price = parseReinvestmentPrice(record.description) ?? .zero
 
             return ParsedTrade(
                 type: .dividendReinvest,
@@ -242,56 +236,62 @@ public final class FirstradeParser: BrokerParser, Sendable {
                 totalAmount: abs(record.amount),
                 tradeDate: record.tradeDate,
                 optionInfo: nil,
+                dividendInfo: nil,
+                feeInfo: nil,
                 note: record.description,
                 rawSource: "Firstrade"
             )
         }
 
-        // 3. Option Expiration
+        // 4. Option Expiration
         // Format: Action=Other, RecordType=Financial, Description contains "EXPIRED"
         if record.recordType == "Financial" && actionUpper == "OTHER" &&
            descriptionUpper.contains("EXPIRED") {
             guard let optionInfo = parseOptionDescription(record.description) else {
                 return nil
             }
-            guard record.quantity > 0 else { return nil }
+            guard record.quantity > .zero else { return nil }
 
             return ParsedTrade(
                 type: .optionExpiration,
                 ticker: optionInfo.underlyingTicker,
                 quantity: record.quantity,
-                price: 0,
-                totalAmount: 0,
+                price: .zero,
+                totalAmount: .zero,
                 tradeDate: record.tradeDate,
                 optionInfo: optionInfo,
+                dividendInfo: nil,
+                feeInfo: nil,
                 note: record.description,
                 rawSource: "Firstrade"
             )
         }
 
-        // 4. Option Assignment
+        // 5. Option Assignment
         // Format: Action=Other, RecordType=Financial, Description contains "ASSIGNED"
         if record.recordType == "Financial" && actionUpper == "OTHER" &&
            descriptionUpper.contains("ASSIGNED") {
             guard let optionInfo = parseOptionDescription(record.description) else {
                 return nil
             }
-            guard record.quantity > 0 else { return nil }
+            guard record.quantity > .zero else { return nil }
 
             return ParsedTrade(
                 type: .optionAssignment,
                 ticker: optionInfo.underlyingTicker,
                 quantity: record.quantity,
-                price: 0,
-                totalAmount: 0,
+                price: .zero,
+                totalAmount: .zero,
                 tradeDate: record.tradeDate,
                 optionInfo: optionInfo,
+                dividendInfo: nil,
+                feeInfo: nil,
                 note: record.description,
                 rawSource: "Firstrade"
             )
         }
 
-        // 5. Trade records
+        // 6. Trade records
         guard record.recordType == "Trade" else { return nil }
         guard actionUpper == "BUY" || actionUpper == "SELL" else { return nil }
 
@@ -327,6 +327,8 @@ public final class FirstradeParser: BrokerParser, Sendable {
                 totalAmount: abs(record.amount),
                 tradeDate: record.tradeDate,
                 optionInfo: optionInfo,
+                dividendInfo: nil,
+                feeInfo: nil,
                 note: record.description,
                 rawSource: "Firstrade"
             )
@@ -346,11 +348,98 @@ public final class FirstradeParser: BrokerParser, Sendable {
                 totalAmount: abs(record.amount),
                 tradeDate: record.tradeDate,
                 optionInfo: nil,
+                dividendInfo: nil,
+                feeInfo: nil,
                 note: record.description,
                 rawSource: "Firstrade"
             )
         }
     }
+
+    // MARK: - Dividend Parsing
+
+    /// Parse dividend record with tax withholding from description.
+    private func parseDividend(_ record: FirstradeCSVRecord) -> ParsedTrade? {
+        let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
+        guard !symbol.isEmpty else { return nil }
+
+        // Amount is net amount (after tax)
+        let netAmount = abs(record.amount)
+        guard netAmount > .zero else { return nil }
+
+        // Parse tax withheld from description
+        // Example: "...NON-RES TAX WITHHELD $1.58"
+        let taxWithheld = parseTaxWithheld(from: record.description) ?? .zero
+        let grossAmount = netAmount + taxWithheld
+
+        let dividendInfo = DividendInfo(
+            type: .ordinary,  // Firstrade doesn't distinguish qualified/ordinary
+            grossAmount: grossAmount,
+            taxWithheld: taxWithheld,
+            issueId: nil
+        )
+
+        return ParsedTrade(
+            type: .dividend,
+            ticker: symbol,
+            quantity: .zero,
+            price: .zero,
+            totalAmount: netAmount,
+            tradeDate: record.tradeDate,
+            optionInfo: nil,
+            dividendInfo: dividendInfo,
+            feeInfo: nil,
+            note: record.description,
+            rawSource: "Firstrade"
+        )
+    }
+
+    /// Parse tax withheld from description.
+    /// Example: "NON-RES TAX WITHHELD $1.58" → 1.58
+    private func parseTaxWithheld(from description: String) -> Decimal? {
+        let pattern = #"NON-RES TAX WITHHELD\s+\$?([\d.]+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+              let match = regex.firstMatch(
+                  in: description,
+                  range: NSRange(description.startIndex..., in: description)
+              ),
+              let range = Range(match.range(at: 1), in: description) else {
+            return nil
+        }
+        return Decimal(string: String(description[range]))
+    }
+
+    // MARK: - ADR Fee Parsing
+
+    /// Parse ADR Management Fee record.
+    private func parseADRFee(_ record: FirstradeCSVRecord) -> ParsedTrade? {
+        let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
+        guard !symbol.isEmpty else { return nil }
+
+        let amount = abs(record.amount)
+        guard amount > .zero else { return nil }
+
+        let feeInfo = FeeInfo(
+            type: .adrMgmtFee,
+            amount: amount
+        )
+
+        return ParsedTrade(
+            type: .fee,
+            ticker: symbol,
+            quantity: .zero,
+            price: .zero,
+            totalAmount: amount,
+            tradeDate: record.tradeDate,
+            optionInfo: nil,
+            dividendInfo: nil,
+            feeInfo: feeInfo,
+            note: record.description,
+            rawSource: "Firstrade"
+        )
+    }
+
+    // MARK: - Option Parsing
 
     /// Parse option description.
     /// Format: {PUT/CALL} {TICKER} {MM/DD/YY} {STRIKE} {DESCRIPTION}...
@@ -403,7 +492,7 @@ public final class FirstradeParser: BrokerParser, Sendable {
         }
 
         // Parse strike price
-        guard let strikePrice = Double(strikeStr) else {
+        guard let strikePrice = Decimal(string: strikeStr) else {
             return nil
         }
 
@@ -417,7 +506,7 @@ public final class FirstradeParser: BrokerParser, Sendable {
 
     /// Parse dividend reinvestment price.
     /// Format: ... REIN @ 158.8300 ...
-    private func parseReinvestmentPrice(_ description: String) -> Double? {
+    private func parseReinvestmentPrice(_ description: String) -> Decimal? {
         let pattern = #"REIN\s*@\s*([\d.]+)"#
 
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
@@ -432,6 +521,18 @@ public final class FirstradeParser: BrokerParser, Sendable {
         }
 
         let priceStr = String(description[priceRange])
-        return Double(priceStr)
+        return Decimal(string: priceStr)
     }
+}
+
+// MARK: - Decimal Absolute Value Extension
+
+private extension Decimal {
+    func abs() -> Decimal {
+        return self < .zero ? -self : self
+    }
+}
+
+private func abs(_ value: Decimal) -> Decimal {
+    return value < .zero ? -value : value
 }

@@ -294,9 +294,32 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                     )
                 }
 
+                // W-8 Withholding (TDA TRAN - W-8 WITHHOLDING)
+                // These have non-zero amount and should be imported as taxWithholding
+                if descUpper.contains("W-8 WITHHOLDING") && abs(amount) > 0 {
+                    // Extract symbol from description like "W-8 WITHHOLDING (NVDA)"
+                    var symbol = ""
+                    if let openParen = record.description.range(of: "("),
+                       let closeParen = record.description.range(of: ")") {
+                        symbol = String(record.description[openParen.upperBound..<closeParen.lowerBound])
+                    }
+
+                    return ParsedTrade(
+                        type: .taxWithholding,
+                        ticker: symbol.uppercased(),
+                        quantity: 0,
+                        price: 0,
+                        totalAmount: abs(amount),
+                        tradeDate: parsedDate,
+                        optionInfo: nil,
+                        note: "\(record.action): \(record.description)",
+                        rawSource: "Charles Schwab"
+                    )
+                }
+
                 // Symbol exchange (SPAC mergers, etc.)
                 guard descUpper.contains("EXCHANGE") else {
-                    return nil  // Not exchange or split, skip
+                    return nil  // Not exchange, split, or withholding - skip
                 }
             }
 
@@ -321,6 +344,75 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 quantity: abs(quantity),
                 price: 0,
                 totalAmount: 0,
+                tradeDate: parsedDate,
+                optionInfo: nil,
+                note: "\(record.action): \(record.description)",
+                rawSource: "Charles Schwab"
+            )
+        }
+
+        // Cash transfers (deposits/withdraws)
+        if actionType == .moneyLinkDeposit || actionType == .moneyLinkTransfer {
+            // Determine deposit vs withdraw based on amount sign
+            let tradeType: ParsedTradeType = amount >= 0 ? .deposit : .withdraw
+
+            return ParsedTrade(
+                type: tradeType,
+                ticker: "",  // No symbol for cash transfers
+                quantity: 0,
+                price: 0,
+                totalAmount: abs(amount),
+                tradeDate: parsedDate,
+                optionInfo: nil,
+                note: "\(record.action): \(record.description)",
+                rawSource: "Charles Schwab"
+            )
+        }
+
+        // Interest income (Bond Interest, Credit Interest)
+        if actionType == .bondInterest || actionType == .creditInterest {
+            guard abs(amount) > 0 else { return nil }  // Skip zero-amount records
+
+            return ParsedTrade(
+                type: .interestIncome,
+                ticker: "",  // No symbol for interest
+                quantity: 0,
+                price: 0,
+                totalAmount: abs(amount),
+                tradeDate: parsedDate,
+                optionInfo: nil,
+                note: "\(record.action): \(record.description)",
+                rawSource: "Charles Schwab"
+            )
+        }
+
+        // Tax withholding (NRA Tax Adj)
+        if actionType == .nraTaxAdj {
+            guard abs(amount) > 0 else { return nil }  // Skip zero-amount records
+
+            return ParsedTrade(
+                type: .taxWithholding,
+                ticker: record.symbol.trimmingCharacters(in: .whitespaces),  // Keep related symbol
+                quantity: 0,
+                price: 0,
+                totalAmount: abs(amount),
+                tradeDate: parsedDate,
+                optionInfo: nil,
+                note: "\(record.action): \(record.description)",
+                rawSource: "Charles Schwab"
+            )
+        }
+
+        // Dividend reinvest
+        if actionType == .qualDivReinvest || actionType == .reinvestDividend {
+            let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
+
+            return ParsedTrade(
+                type: .dividendReinvest,
+                ticker: symbol.uppercased(),
+                quantity: abs(quantity),
+                price: price,
+                totalAmount: abs(amount),
                 tradeDate: parsedDate,
                 optionInfo: nil,
                 note: "\(record.action): \(record.description)",

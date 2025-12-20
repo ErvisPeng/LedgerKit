@@ -47,6 +47,15 @@
 
 Symbol 為空，但可從 Description 解析出股票代號 `SE`。應作為獨立的 `fee` 類型記錄。
 
+**Firstrade ADR 管理費：**
+```csv
+ARM,0.00,,Other,***ARM HOLDINGS PLC AMERICAN DEPOSITARY SHARES ADR Fee 2023-12-18 Qty - 10.0000000000 0953- CITIBANK,2024-01-12,2024-01-12,0.00,-0.2,0.00,0.00,042068205,Financial
+```
+
+- Symbol 欄位有值 `ARM`
+- Action = `Other`，RecordType = `Financial`
+- Description 包含 `ADR Fee` 關鍵字
+
 ### 1.3 目標
 
 - 配息記錄包含預扣稅金資訊（淨額 = 股息 - 稅金）
@@ -262,7 +271,37 @@ private func parseSymbolFromDescription(_ description: String) -> String? {
 }
 ```
 
-### 3.3 金額解析改用 Decimal
+### 3.3 Firstrade ADR Fee 解析
+
+```swift
+private func parseADRFee(_ record: FirstradeCSVRecord) -> ParsedTrade? {
+    // 識別條件：Action = "Other", RecordType = "Financial", Description 含 "ADR Fee"
+    guard record.action.uppercased() == "OTHER",
+          record.recordType == "Financial",
+          record.description.uppercased().contains("ADR FEE") else {
+        return nil
+    }
+
+    let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
+    guard !symbol.isEmpty else { return nil }
+
+    let amount = abs(record.amount)
+
+    return ParsedTrade(
+        type: .fee,
+        ticker: symbol,
+        quantity: .zero,
+        price: .zero,
+        totalAmount: amount,
+        tradeDate: record.tradeDate,
+        feeInfo: FeeInfo(type: .adrMgmtFee, amount: amount),
+        note: record.description,
+        rawSource: "Firstrade"
+    )
+}
+```
+
+### 3.4 金額解析改用 Decimal
 
 ```swift
 // 舊
@@ -387,11 +426,11 @@ func dividendWithoutTax() throws {
 }
 ```
 
-### 6.3 ADR Fee 解析測試
+### 6.3 Charles Schwab ADR Fee 解析測試
 
 ```swift
-@Test("ADR Mgmt Fee parsed correctly")
-func adrMgmtFeeParsed() throws {
+@Test("Charles Schwab ADR Mgmt Fee parsed correctly")
+func charlesSchwabAdrMgmtFeeParsed() throws {
     let transactions = [
         makeTransaction(
             action: "ADR Mgmt Fee",
@@ -412,7 +451,37 @@ func adrMgmtFeeParsed() throws {
 }
 ```
 
-### 6.4 Decimal 精度測試
+### 6.4 Firstrade ADR Fee 解析測試
+
+```swift
+@Test("Firstrade ADR Fee parsed correctly")
+func firstradeAdrFeeParsed() throws {
+    let record = FirstradeCSVRecord(
+        symbol: "ARM",
+        quantity: 0,
+        price: 0,
+        action: "Other",
+        description: "***ARM HOLDINGS PLC AMERICAN DEPOSITARY SHARES ADR Fee 2023-12-18",
+        tradeDate: Date(),
+        settledDate: Date(),
+        interest: 0,
+        amount: -0.2,
+        commission: 0,
+        fee: 0,
+        cusip: "042068205",
+        recordType: "Financial"
+    )
+
+    let trade = try parser.parseRecord(record)
+
+    #expect(trade?.type == .fee)
+    #expect(trade?.ticker == "ARM")
+    #expect(trade?.totalAmount == Decimal(string: "0.2"))
+    #expect(trade?.feeInfo?.type == .adrMgmtFee)
+}
+```
+
+### 6.5 Decimal 精度測試
 
 ```swift
 @Test("Decimal precision maintained")
@@ -503,9 +572,9 @@ public let feeInfo: FeeInfo?            // nil = 舊資料
 
 ## 八、待確認問題
 
-1. **Firstrade 是否有類似的稅金記錄？**
-   - 需要確認 Firstrade 的資料格式
-   - 如果有，需要同步更新 FirstradeParser
+1. **Firstrade 是否有類似的稅金（NRA Tax）記錄？**
+   - ADR Fee 已確認格式（見 1.2）
+   - 需要確認是否有股息預扣稅的記錄
 
 ---
 

@@ -216,7 +216,7 @@ struct FirstradeParserTests {
         #expect(trade.ticker == "ARM")
         #expect(trade.totalAmount == Decimal(string: "1.25"))
         #expect(trade.feeInfo != nil)
-        #expect(trade.feeInfo?.type == .adrManagementFee)
+        #expect(trade.feeInfo?.type == .adrMgmtFee)
         #expect(trade.feeInfo?.amount == Decimal(string: "1.25"))
     }
 

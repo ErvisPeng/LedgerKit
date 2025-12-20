@@ -447,7 +447,7 @@ struct CharlesSchwabParserTests {
         #expect(trade.ticker == "TSM")
         #expect(trade.totalAmount == Decimal(string: "2.50"))
         #expect(trade.feeInfo != nil)
-        #expect(trade.feeInfo?.type == .adrManagementFee)
+        #expect(trade.feeInfo?.type == .adrMgmtFee)
         #expect(trade.feeInfo?.amount == Decimal(string: "2.50"))
     }
 

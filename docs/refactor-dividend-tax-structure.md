@@ -56,6 +56,16 @@ ARM,0.00,,Other,***ARM HOLDINGS PLC AMERICAN DEPOSITARY SHARES ADR Fee 2023-12-1
 - Action = `Other`，RecordType = `Financial`
 - Description 包含 `ADR Fee` 關鍵字
 
+**Firstrade 股息（含預扣稅）：**
+```csv
+KO,0.00,,Dividend,COCA COLA COMPANY (THE) CASH DIV ON 10.31822 SHS REC 06/13/25 PAY 07/01/25 NON-RES TAX WITHHELD $1.58,2025-07-01,2025-07-01,0.00,5.26,0.00,0.00,191216100,Financial
+```
+
+- Action = `Dividend`，RecordType = `Financial`
+- Amount = `5.26` 是**淨額**（已扣稅）
+- Description 包含 `NON-RES TAX WITHHELD $1.58`
+- 毛額需計算：淨額 + 稅金 = $5.26 + $1.58 = $6.84
+
 ### 1.3 目標
 
 - 配息記錄包含預扣稅金資訊（淨額 = 股息 - 稅金）
@@ -301,7 +311,62 @@ private func parseADRFee(_ record: FirstradeCSVRecord) -> ParsedTrade? {
 }
 ```
 
-### 3.4 金額解析改用 Decimal
+### 3.4 Firstrade 股息解析（含預扣稅）
+
+```swift
+private func parseDividend(_ record: FirstradeCSVRecord) -> ParsedTrade? {
+    guard record.action.uppercased() == "DIVIDEND",
+          record.recordType == "Financial" else {
+        return nil
+    }
+
+    let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
+    guard !symbol.isEmpty else { return nil }
+
+    let netAmount = abs(record.amount)  // Amount 是淨額
+
+    // 從 Description 解析預扣稅金
+    // 例如 "...NON-RES TAX WITHHELD $1.58" → 1.58
+    let taxWithheld = parseTaxWithheld(from: record.description) ?? .zero
+    let grossAmount = netAmount + taxWithheld
+
+    let dividendInfo = DividendInfo(
+        type: .ordinary,  // Firstrade 不區分 qualified/ordinary
+        grossAmount: grossAmount,
+        taxWithheld: taxWithheld,
+        issueId: nil
+    )
+
+    return ParsedTrade(
+        type: .dividend,
+        ticker: symbol,
+        quantity: .zero,
+        price: .zero,
+        totalAmount: netAmount,  // 使用淨額
+        tradeDate: record.tradeDate,
+        dividendInfo: dividendInfo,
+        note: record.description,
+        rawSource: "Firstrade"
+    )
+}
+
+/// 從 Description 解析預扣稅金
+/// 例如 "NON-RES TAX WITHHELD $1.58" → 1.58
+private func parseTaxWithheld(from description: String) -> Decimal? {
+    let pattern = #"NON-RES TAX WITHHELD\s+\$?([\d.]+)"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+          let match = regex.firstMatch(
+              in: description,
+              range: NSRange(description.startIndex..., in: description)
+          ),
+          let range = Range(match.range(at: 1), in: description) else {
+        return nil
+    }
+    return Decimal(string: String(description[range]))
+}
+```
+
+### 3.5 金額解析改用 Decimal
 
 ```swift
 // 舊
@@ -481,7 +546,39 @@ func firstradeAdrFeeParsed() throws {
 }
 ```
 
-### 6.5 Decimal 精度測試
+### 6.5 Firstrade 股息（含預扣稅）測試
+
+```swift
+@Test("Firstrade dividend with tax withheld parsed correctly")
+func firstradeDividendWithTax() throws {
+    let record = FirstradeCSVRecord(
+        symbol: "KO",
+        quantity: 0,
+        price: 0,
+        action: "Dividend",
+        description: "COCA COLA COMPANY (THE) CASH DIV ON 10.31822 SHS REC 06/13/25 PAY 07/01/25 NON-RES TAX WITHHELD $1.58",
+        tradeDate: Date(),
+        settledDate: Date(),
+        interest: 0,
+        amount: 5.26,  // 淨額
+        commission: 0,
+        fee: 0,
+        cusip: "191216100",
+        recordType: "Financial"
+    )
+
+    let trade = try parser.parseRecord(record)
+
+    #expect(trade?.type == .dividend)
+    #expect(trade?.ticker == "KO")
+    #expect(trade?.totalAmount == Decimal(string: "5.26"))        // 淨額
+    #expect(trade?.dividendInfo?.grossAmount == Decimal(string: "6.84"))  // 5.26 + 1.58
+    #expect(trade?.dividendInfo?.taxWithheld == Decimal(string: "1.58"))
+    #expect(trade?.dividendInfo?.netAmount == Decimal(string: "5.26"))
+}
+```
+
+### 6.6 Decimal 精度測試
 
 ```swift
 @Test("Decimal precision maintained")
@@ -572,9 +669,7 @@ public let feeInfo: FeeInfo?            // nil = 舊資料
 
 ## 八、待確認問題
 
-1. **Firstrade 是否有類似的稅金（NRA Tax）記錄？**
-   - ADR Fee 已確認格式（見 1.2）
-   - 需要確認是否有股息預扣稅的記錄
+（無）
 
 ---
 

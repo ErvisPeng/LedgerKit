@@ -609,8 +609,8 @@ struct CharlesSchwabParserTests {
         #expect(CharlesSchwabActionType.sell.shouldImport == true)
         #expect(CharlesSchwabActionType.buyToOpen.shouldImport == true)
         #expect(CharlesSchwabActionType.cashDividend.shouldImport == true)
-        #expect(CharlesSchwabActionType.nraTaxAdj.shouldImport == false)
-        #expect(CharlesSchwabActionType.adrMgmtFee.shouldImport == false)
+        #expect(CharlesSchwabActionType.nraTaxAdj.shouldImport == true)  // Used for dividend+tax merge
+        #expect(CharlesSchwabActionType.adrMgmtFee.shouldImport == false)  // Handled specially
     }
 
     @Test("ActionType isOptionTrade property")

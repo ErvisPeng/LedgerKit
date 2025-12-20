@@ -581,10 +581,16 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             return nil
         }
 
-        // Parse symbol from description: "TDA TRAN - ADR FEE (SE)" → "SE"
-        guard let symbol = parseSymbolFromDescription(record.description),
-              !symbol.isEmpty else {
-            return nil
+        // Use symbol from record, or extract first word from description as fallback
+        let symbol: String
+        if !record.symbol.isEmpty {
+            symbol = record.symbol
+        } else {
+            // Extract first word (ticker) from description
+            // Example: "ARM HOLDINGS PLC SPONSORED ADS (SE) ADR FEES" → "ARM"
+            let firstWord = record.description.split(separator: " ").first.map(String.init) ?? ""
+            guard !firstWord.isEmpty else { return nil }
+            symbol = firstWord
         }
 
         let amount = abs(parseAmount(record.amount))
@@ -608,21 +614,6 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             note: record.description,
             rawSource: "Charles Schwab"
         )
-    }
-
-    /// Parse symbol from ADR fee description.
-    /// Example: "TDA TRAN - ADR FEE (SE)" → "SE"
-    private func parseSymbolFromDescription(_ description: String) -> String? {
-        let pattern = #"\(([A-Z]+)\)$"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(
-                  in: description,
-                  range: NSRange(description.startIndex..., in: description)
-              ),
-              let range = Range(match.range(at: 1), in: description) else {
-            return nil
-        }
-        return String(description[range])
     }
 
     // MARK: - Value Parsing

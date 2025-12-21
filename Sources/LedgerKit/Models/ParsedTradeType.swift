@@ -25,6 +25,7 @@ public enum ParsedTradeType: String, Sendable, CaseIterable, Codable {
     case symbolExchangeIn = "symbol_exchange_in"
     case optionExpiration = "option_expiration"
     case optionAssignment = "option_assignment"
+    case fee = "fee"
 
     // Cash transfer types
     case deposit = "deposit"
@@ -112,6 +113,7 @@ public enum ParsedTradeType: String, Sendable, CaseIterable, Codable {
         case .symbolExchangeIn: return "Exchange In"
         case .optionExpiration: return "Option Expired"
         case .optionAssignment: return "Option Assigned"
+        case .fee: return "Fee"
         case .deposit: return "Deposit"
         case .withdraw: return "Withdraw"
         case .interestIncome: return "Interest Income"

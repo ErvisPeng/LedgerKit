@@ -78,9 +78,23 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         // Build company name to ticker mapping for CUSIP resolution
         let companyTickerMap = buildCompanyTickerMap(from: records)
 
-        for record in records {
-            if let trade = parseTrade(from: record, companyTickerMap: companyTickerMap) {
-                trades.append(trade)
+        // Group records by ItemIssueId for dividend + tax merging
+        let grouped = Dictionary(grouping: records) { $0.itemIssueId }
+
+        for (issueId, group) in grouped {
+            // Non-empty issueId: try to merge dividend + tax
+            if !issueId.isEmpty && issueId != "0" {
+                if let mergedTrade = tryMergeDividendWithTax(group, issueId: issueId) {
+                    trades.append(mergedTrade)
+                    continue
+                }
+            }
+
+            // Process each record individually
+            for record in group {
+                if let trade = parseTrade(from: record, companyTickerMap: companyTickerMap) {
+                    trades.append(trade)
+                }
             }
         }
 
@@ -95,6 +109,75 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             return priority1 < priority2
         }
         return (sortedTrades, warnings)
+    }
+
+    // MARK: - Dividend + Tax Merging
+
+    /// Try to merge dividend and NRA Tax Adj records with same ItemIssueId.
+    private func tryMergeDividendWithTax(
+        _ records: [CharlesSchwabRawTransaction],
+        issueId: String
+    ) -> ParsedTrade? {
+        // Find dividend record
+        let dividendRecord = records.first { record in
+            guard let actionType = CharlesSchwabActionType(rawAction: record.action) else {
+                return false
+            }
+            return actionType.isDividend
+        }
+
+        // Find tax record
+        let taxRecord = records.first { $0.action == "NRA Tax Adj" }
+
+        guard let dividend = dividendRecord,
+              let parsedDate = parseDate(dividend.date) else {
+            return nil
+        }
+
+        let symbol = dividend.symbol.trimmingCharacters(in: .whitespaces)
+        guard !symbol.isEmpty else { return nil }
+
+        let grossAmount = abs(parseAmount(dividend.amount))
+        guard grossAmount > .zero else { return nil }
+
+        let taxAmount: Decimal
+        if let tax = taxRecord {
+            taxAmount = abs(parseAmount(tax.amount))
+        } else {
+            taxAmount = .zero
+        }
+
+        // Determine dividend type
+        let dividendType: DividendType
+        switch dividend.action {
+        case "Qualified Dividend":
+            dividendType = .qualified
+        case "Long Term Cap Gain":
+            dividendType = .capitalGain
+        default:
+            dividendType = .ordinary
+        }
+
+        let dividendInfo = DividendInfo(
+            type: dividendType,
+            grossAmount: grossAmount,
+            taxWithheld: taxAmount,
+            issueId: issueId
+        )
+
+        return ParsedTrade(
+            type: .dividend,
+            ticker: symbol.uppercased(),
+            quantity: .zero,
+            price: .zero,
+            totalAmount: dividendInfo.netAmount,
+            tradeDate: parsedDate,
+            optionInfo: nil,
+            dividendInfo: dividendInfo,
+            feeInfo: nil,
+            note: "\(dividend.action): \(dividend.description)",
+            rawSource: "Charles Schwab"
+        )
     }
 
     // MARK: - CUSIP Detection
@@ -194,6 +277,16 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         from record: CharlesSchwabRawTransaction,
         companyTickerMap: [String: String] = [:]
     ) -> ParsedTrade? {
+        // Handle ADR Mgmt Fee
+        if record.action == "ADR Mgmt Fee" {
+            return parseADRFee(record)
+        }
+
+        // Handle NRA Tax Adj - skip (handled in merge)
+        if record.action == "NRA Tax Adj" {
+            return nil
+        }
+
         guard let actionType = CharlesSchwabActionType(rawAction: record.action),
               actionType.shouldImport else {
             return nil
@@ -225,28 +318,49 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 totalAmount: abs(amount),
                 tradeDate: parsedDate,
                 optionInfo: optionInfo,
+                dividendInfo: nil,
+                feeInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
             )
         }
 
-        // Dividends
+        // Dividends (standalone, not merged)
         if actionType.isDividend {
             let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
             guard !symbol.isEmpty else { return nil }
 
-            // Skip zero-amount dividend records
             let dividendAmount = abs(amount)
-            guard dividendAmount > 0 else { return nil }
+            guard dividendAmount > .zero else { return nil }
+
+            // Determine dividend type
+            let dividendType: DividendType
+            switch record.action {
+            case "Qualified Dividend":
+                dividendType = .qualified
+            case "Long Term Cap Gain":
+                dividendType = .capitalGain
+            default:
+                dividendType = .ordinary
+            }
+
+            let dividendInfo = DividendInfo(
+                type: dividendType,
+                grossAmount: dividendAmount,
+                taxWithheld: .zero,
+                issueId: record.itemIssueId.isEmpty ? nil : record.itemIssueId
+            )
 
             return ParsedTrade(
                 type: .dividend,
-                ticker: symbol,
-                quantity: 0,
-                price: 0,
+                ticker: symbol.uppercased(),
+                quantity: .zero,
+                price: .zero,
                 totalAmount: dividendAmount,
                 tradeDate: parsedDate,
                 optionInfo: nil,
+                dividendInfo: dividendInfo,
+                feeInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
             )
@@ -259,12 +373,14 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
 
             return ParsedTrade(
                 type: .stockBuy,
-                ticker: symbol,
+                ticker: symbol.uppercased(),
                 quantity: abs(quantity),
-                price: 0,
-                totalAmount: 0,
+                price: .zero,
+                totalAmount: .zero,
                 tradeDate: parsedDate,
                 optionInfo: nil,
+                dividendInfo: nil,
+                feeInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
             )
@@ -285,10 +401,12 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                         type: .stockBuy,
                         ticker: symbol.uppercased(),
                         quantity: abs(quantity),
-                        price: 0,
-                        totalAmount: 0,
+                        price: .zero,
+                        totalAmount: .zero,
                         tradeDate: parsedDate,
                         optionInfo: nil,
+                        dividendInfo: nil,
+                        feeInfo: nil,
                         note: "\(record.action): \(record.description)",
                         rawSource: "Charles Schwab"
                     )
@@ -336,16 +454,18 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 }
             }
 
-            let tradeType: ParsedTradeType = quantity < 0 ? .symbolExchangeOut : .symbolExchangeIn
+            let tradeType: ParsedTradeType = quantity < .zero ? .symbolExchangeOut : .symbolExchangeIn
 
             return ParsedTrade(
                 type: tradeType,
                 ticker: symbol.uppercased(),
                 quantity: abs(quantity),
-                price: 0,
-                totalAmount: 0,
+                price: .zero,
+                totalAmount: .zero,
                 tradeDate: parsedDate,
                 optionInfo: nil,
+                dividendInfo: nil,
+                feeInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
             )
@@ -446,7 +566,52 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             totalAmount: abs(amount),
             tradeDate: parsedDate,
             optionInfo: nil,
+            dividendInfo: nil,
+            feeInfo: nil,
             note: "\(record.action): \(record.description)",
+            rawSource: "Charles Schwab"
+        )
+    }
+
+    // MARK: - ADR Fee Parsing
+
+    /// Parse ADR Management Fee record.
+    private func parseADRFee(_ record: CharlesSchwabRawTransaction) -> ParsedTrade? {
+        guard let parsedDate = parseDate(record.date) else {
+            return nil
+        }
+
+        // Use symbol from record, or extract first word from description as fallback
+        let symbol: String
+        if !record.symbol.isEmpty {
+            symbol = record.symbol
+        } else {
+            // Extract first word (ticker) from description
+            // Example: "ARM HOLDINGS PLC SPONSORED ADS (SE) ADR FEES" → "ARM"
+            let firstWord = record.description.split(separator: " ").first.map(String.init) ?? ""
+            guard !firstWord.isEmpty else { return nil }
+            symbol = firstWord
+        }
+
+        let amount = abs(parseAmount(record.amount))
+        guard amount > .zero else { return nil }
+
+        let feeInfo = FeeInfo(
+            type: .adrMgmtFee,
+            amount: amount
+        )
+
+        return ParsedTrade(
+            type: .fee,
+            ticker: symbol,
+            quantity: .zero,
+            price: .zero,
+            totalAmount: amount,
+            tradeDate: parsedDate,
+            optionInfo: nil,
+            dividendInfo: nil,
+            feeInfo: feeInfo,
+            note: record.description,
             rawSource: "Charles Schwab"
         )
     }
@@ -470,17 +635,17 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
     }
 
     /// Parse quantity string.
-    private func parseQuantity(_ quantityString: String) -> Double {
+    private func parseQuantity(_ quantityString: String) -> Decimal {
         let trimmed = quantityString.trimmingCharacters(in: .whitespaces)
-        return Double(trimmed) ?? 0
+        return Decimal(string: trimmed) ?? .zero
     }
 
     /// Parse amount string (remove $ and commas).
-    private func parseAmount(_ amountString: String) -> Double {
+    private func parseAmount(_ amountString: String) -> Decimal {
         var cleaned = amountString.trimmingCharacters(in: .whitespaces)
         cleaned = cleaned.replacingOccurrences(of: "$", with: "")
         cleaned = cleaned.replacingOccurrences(of: ",", with: "")
-        return Double(cleaned) ?? 0
+        return Decimal(string: cleaned) ?? .zero
     }
 
     // MARK: - Option Symbol Parsing
@@ -536,7 +701,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         }
 
         // Parse strike price
-        guard let strikePrice = Double(strikeStr) else {
+        guard let strikePrice = Decimal(string: strikeStr) else {
             return nil
         }
 

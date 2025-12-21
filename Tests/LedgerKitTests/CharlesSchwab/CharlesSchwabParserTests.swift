@@ -25,7 +25,8 @@ struct CharlesSchwabParserTests {
         quantity: String = "0",
         price: String = "$0.00",
         feesAndComm: String = "$0.00",
-        amount: String = "$0.00"
+        amount: String = "$0.00",
+        itemIssueId: String = ""
     ) -> [String: String] {
         [
             "Date": date,
@@ -36,7 +37,7 @@ struct CharlesSchwabParserTests {
             "Price": price,
             "Fees & Comm": feesAndComm,
             "Amount": amount,
-            "ItemIssueId": "",
+            "ItemIssueId": itemIssueId,
             "AcctgRuleCd": ""
         ]
     }
@@ -106,9 +107,9 @@ struct CharlesSchwabParserTests {
         let trade = trades[0]
         #expect(trade.type == .stockBuy)
         #expect(trade.ticker == "AAPL")
-        #expect(trade.quantity == 100.0)
-        #expect(trade.price == 150.50)
-        #expect(trade.totalAmount == 15050.00)
+        #expect(trade.quantity == 100)
+        #expect(trade.price == Decimal(string: "150.50"))
+        #expect(trade.totalAmount == Decimal(string: "15050.00"))
     }
 
     @Test("Stock sell is parsed correctly")
@@ -131,8 +132,8 @@ struct CharlesSchwabParserTests {
         let trade = trades[0]
         #expect(trade.type == .stockSell)
         #expect(trade.ticker == "AAPL")
-        #expect(trade.quantity == 50.0)
-        #expect(trade.price == 155.00)
+        #expect(trade.quantity == 50)
+        #expect(trade.price == 155)
     }
 
     // MARK: - Option Trade Parsing Tests
@@ -157,11 +158,11 @@ struct CharlesSchwabParserTests {
         let trade = trades[0]
         #expect(trade.type == .optionBuyToOpen)
         #expect(trade.ticker == "AAPL")
-        #expect(trade.quantity == 1.0)
-        #expect(trade.price == 5.50)
+        #expect(trade.quantity == 1)
+        #expect(trade.price == Decimal(string: "5.50"))
         #expect(trade.optionInfo != nil)
         #expect(trade.optionInfo?.optionType == .call)
-        #expect(trade.optionInfo?.strikePrice == 150.0)
+        #expect(trade.optionInfo?.strikePrice == 150)
     }
 
     @Test("Option sell to open is parsed correctly")
@@ -185,7 +186,7 @@ struct CharlesSchwabParserTests {
         #expect(trade.type == .optionSellToOpen)
         #expect(trade.ticker == "HIMS")
         #expect(trade.optionInfo?.optionType == .put)
-        #expect(trade.optionInfo?.strikePrice == 45.0)
+        #expect(trade.optionInfo?.strikePrice == 45)
     }
 
     @Test("Option buy to close is parsed correctly")
@@ -246,9 +247,12 @@ struct CharlesSchwabParserTests {
         let trade = trades[0]
         #expect(trade.type == .dividend)
         #expect(trade.ticker == "AAPL")
-        #expect(trade.totalAmount == 25.00)
+        #expect(trade.totalAmount == 25)
         #expect(trade.quantity == 0)
         #expect(trade.price == 0)
+        #expect(trade.dividendInfo != nil)
+        #expect(trade.dividendInfo?.grossAmount == 25)
+        #expect(trade.dividendInfo?.taxWithheld == 0)
     }
 
     @Test("Qualified dividend is parsed correctly")
@@ -302,7 +306,7 @@ struct CharlesSchwabParserTests {
         let trade = trades[0]
         #expect(trade.type == .stockBuy)
         #expect(trade.ticker == "NVDA")
-        #expect(trade.quantity == 90.0)
+        #expect(trade.quantity == 90)
         #expect(trade.price == 0)
         #expect(trade.totalAmount == 0)
     }
@@ -328,7 +332,7 @@ struct CharlesSchwabParserTests {
         let trade = trades[0]
         #expect(trade.type == .stockBuy)
         #expect(trade.ticker == "VTI")
-        #expect(trade.quantity == 0.5)
+        #expect(trade.quantity == Decimal(string: "0.5"))
     }
 
     // MARK: - Symbol Exchange Tests
@@ -348,7 +352,7 @@ struct CharlesSchwabParserTests {
         #expect(trades.count == 1)
         #expect(trades[0].type == .symbolExchangeOut)
         #expect(trades[0].ticker == "CCIV")
-        #expect(trades[0].quantity == 100.0)
+        #expect(trades[0].quantity == 100)
     }
 
     @Test("Received other is parsed as exchange in")
@@ -368,14 +372,51 @@ struct CharlesSchwabParserTests {
         #expect(trades[0].ticker == "LCID")
     }
 
-    // MARK: - Skipped Action Types Tests
+    // MARK: - Dividend + Tax Merge Tests
 
-    @Test("NRA Tax Adj is skipped")
-    func nraTaxAdjSkipped() throws {
+    @Test("Dividend and NRA Tax Adj with same ItemIssueId are merged")
+    func dividendAndTaxMerged() throws {
+        let dividendTransaction = makeTransaction(
+            date: "11/03/2025",
+            action: "Qualified Dividend",
+            symbol: "TSM",
+            description: "TAIWAN SEMICONDUCTOR MFG CO LTD SPONSORED ADR CASH DIV ON 100 SHS",
+            amount: "$73.00",
+            itemIssueId: "12345678"
+        )
+        let taxTransaction = makeTransaction(
+            date: "11/03/2025",
+            action: "NRA Tax Adj",
+            symbol: "TSM",
+            description: "TAIWAN SEMICONDUCTOR MFG CO LTD SPONSORED ADR NRA TAX ADJ",
+            amount: "-$15.33",
+            itemIssueId: "12345678"
+        )
+        let data = makeJSONData(transactions: [dividendTransaction, taxTransaction])
+
+        let trades = try parser.parse(data)
+
+        #expect(trades.count == 1)
+
+        let trade = trades[0]
+        #expect(trade.type == .dividend)
+        #expect(trade.ticker == "TSM")
+        #expect(trade.totalAmount == Decimal(string: "57.67"))
+        #expect(trade.dividendInfo != nil)
+        #expect(trade.dividendInfo?.grossAmount == 73)
+        #expect(trade.dividendInfo?.taxWithheld == Decimal(string: "15.33"))
+        #expect(trade.dividendInfo?.netAmount == Decimal(string: "57.67"))
+        #expect(trade.dividendInfo?.issueId == "12345678")
+    }
+
+    @Test("Standalone NRA Tax Adj without matching dividend is skipped")
+    func standaloneTaxSkipped() throws {
         let transaction = makeTransaction(
             action: "NRA Tax Adj",
             symbol: "AAPL",
-            description: "NRA TAX ADJUSTMENT"
+            description: "NRA TAX ADJUSTMENT",
+            amount: "-$5.00",
+            itemIssueId: "99999999"
         )
         let data = makeJSONData(transactions: [transaction])
 
@@ -384,19 +425,50 @@ struct CharlesSchwabParserTests {
         #expect(trades.isEmpty)
     }
 
-    @Test("ADR Mgmt Fee is skipped")
-    func adrMgmtFeeSkipped() throws {
+    // MARK: - ADR Fee Parsing Tests
+
+    @Test("ADR Mgmt Fee is parsed as fee type")
+    func adrMgmtFeeParsed() throws {
         let transaction = makeTransaction(
+            date: "11/06/2025",
             action: "ADR Mgmt Fee",
             symbol: "TSM",
-            description: "ADR MANAGEMENT FEE"
+            description: "TAIWAN SEMICONDUCTOR MFG CO LTD SPONSORED ADR (SE) ADR FEES",
+            amount: "-$2.50"
         )
         let data = makeJSONData(transactions: [transaction])
 
         let trades = try parser.parse(data)
 
-        #expect(trades.isEmpty)
+        #expect(trades.count == 1)
+
+        let trade = trades[0]
+        #expect(trade.type == .fee)
+        #expect(trade.ticker == "TSM")
+        #expect(trade.totalAmount == Decimal(string: "2.50"))
+        #expect(trade.feeInfo != nil)
+        #expect(trade.feeInfo?.type == .adrMgmtFee)
+        #expect(trade.feeInfo?.amount == Decimal(string: "2.50"))
     }
+
+    @Test("ADR Mgmt Fee extracts ticker from description")
+    func adrMgmtFeeExtractsTickerFromDescription() throws {
+        let transaction = makeTransaction(
+            date: "11/06/2025",
+            action: "ADR Mgmt Fee",
+            symbol: "",
+            description: "ARM HOLDINGS PLC SPONSORED ADS (SE) ADR FEES",
+            amount: "-$1.00"
+        )
+        let data = makeJSONData(transactions: [transaction])
+
+        let trades = try parser.parse(data)
+
+        #expect(trades.count == 1)
+        #expect(trades[0].ticker == "ARM")
+    }
+
+    // MARK: - Skipped Action Types Tests
 
     @Test("Internal Transfer is skipped")
     func internalTransferSkipped() throws {
@@ -421,7 +493,7 @@ struct CharlesSchwabParserTests {
         #expect(optionInfo != nil)
         #expect(optionInfo?.optionType == .call)
         #expect(optionInfo?.underlyingTicker == "AAPL")
-        #expect(optionInfo?.strikePrice == 150.0)
+        #expect(optionInfo?.strikePrice == 150)
     }
 
     @Test("Put option symbol is parsed correctly")
@@ -431,7 +503,7 @@ struct CharlesSchwabParserTests {
         #expect(optionInfo != nil)
         #expect(optionInfo?.optionType == .put)
         #expect(optionInfo?.underlyingTicker == "HIMS")
-        #expect(optionInfo?.strikePrice == 45.0)
+        #expect(optionInfo?.strikePrice == 45)
     }
 
     @Test("Option symbol with decimal strike is parsed")
@@ -439,7 +511,7 @@ struct CharlesSchwabParserTests {
         let optionInfo = parser.parseOptionSymbol("LUMN 01/16/2026 5.50 C")
 
         #expect(optionInfo != nil)
-        #expect(optionInfo?.strikePrice == 5.50)
+        #expect(optionInfo?.strikePrice == Decimal(string: "5.50"))
     }
 
     @Test("Invalid option symbol returns nil")
@@ -526,7 +598,7 @@ struct CharlesSchwabParserTests {
         let trades = try parser.parse(data)
 
         #expect(trades.count == 1)
-        #expect(trades[0].totalAmount == 150000.00)
+        #expect(trades[0].totalAmount == 150000)
     }
 
     // MARK: - CharlesSchwabActionType Properties Tests
@@ -537,8 +609,8 @@ struct CharlesSchwabParserTests {
         #expect(CharlesSchwabActionType.sell.shouldImport == true)
         #expect(CharlesSchwabActionType.buyToOpen.shouldImport == true)
         #expect(CharlesSchwabActionType.cashDividend.shouldImport == true)
-        #expect(CharlesSchwabActionType.nraTaxAdj.shouldImport == false)
-        #expect(CharlesSchwabActionType.adrMgmtFee.shouldImport == false)
+        #expect(CharlesSchwabActionType.nraTaxAdj.shouldImport == true)  // Used for dividend+tax merge
+        #expect(CharlesSchwabActionType.adrMgmtFee.shouldImport == false)  // Handled specially
     }
 
     @Test("ActionType isOptionTrade property")

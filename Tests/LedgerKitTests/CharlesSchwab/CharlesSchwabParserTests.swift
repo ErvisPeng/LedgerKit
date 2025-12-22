@@ -109,7 +109,7 @@ struct CharlesSchwabParserTests {
         #expect(trade.ticker == "AAPL")
         #expect(trade.quantity == 100)
         #expect(trade.price == Decimal(string: "150.50"))
-        #expect(trade.totalAmount == Decimal(string: "15050.00"))
+        #expect(trade.totalAmount == Decimal(string: "-15050.00"))  // Negative for buys
     }
 
     @Test("Stock sell is parsed correctly")
@@ -134,6 +134,32 @@ struct CharlesSchwabParserTests {
         #expect(trade.ticker == "AAPL")
         #expect(trade.quantity == 50)
         #expect(trade.price == 155)
+    }
+
+    @Test("Stock sell with commission has feeInfo")
+    func stockSellWithCommissionParsed() throws {
+        let transaction = makeTransaction(
+            date: "01/20/2025",
+            action: "Sell",
+            symbol: "AAPL",
+            description: "APPLE INC",
+            quantity: "-50",
+            price: "$155.00",
+            feesAndComm: "$0.01",
+            amount: "$7,749.99"
+        )
+        let data = makeJSONData(transactions: [transaction])
+
+        let trades = try parser.parse(data)
+
+        #expect(trades.count == 1)
+
+        let trade = trades[0]
+        #expect(trade.type == .stockSell)
+        #expect(trade.totalAmount == Decimal(string: "7749.99"))  // Positive for sells
+        #expect(trade.feeInfo != nil)
+        #expect(trade.feeInfo?.type == .tradingCommission)
+        #expect(trade.feeInfo?.amount == Decimal(string: "0.01"))
     }
 
     // MARK: - Option Trade Parsing Tests
@@ -409,8 +435,8 @@ struct CharlesSchwabParserTests {
         #expect(trade.dividendInfo?.issueId == "12345678")
     }
 
-    @Test("Standalone NRA Tax Adj without matching dividend is skipped")
-    func standaloneTaxSkipped() throws {
+    @Test("Standalone NRA Tax Adj without matching dividend is parsed as taxWithholding")
+    func standaloneTaxParsed() throws {
         let transaction = makeTransaction(
             action: "NRA Tax Adj",
             symbol: "AAPL",
@@ -422,7 +448,81 @@ struct CharlesSchwabParserTests {
 
         let trades = try parser.parse(data)
 
-        #expect(trades.isEmpty)
+        #expect(trades.count == 1)
+        #expect(trades[0].type == .taxWithholding)
+        #expect(trades[0].ticker == "AAPL")
+        #expect(trades[0].totalAmount == Decimal(string: "-5.00"))
+    }
+
+    @Test("Buy and Sell are not skipped when sharing ItemIssueId with dividend")
+    func buySellNotSkippedWithSameIssueId() throws {
+        // This test verifies the bug fix: previously, when a dividend+tax pair was found,
+        // all other records in the same ItemIssueId group were skipped.
+        let buyTransaction = makeTransaction(
+            date: "01/02/2025",
+            action: "Buy",
+            symbol: "NVDA",
+            description: "NVIDIA CORP",
+            quantity: "100",
+            price: "$120.00",
+            amount: "-$12,000.00",
+            itemIssueId: "382397811"  // Same ItemIssueId as dividend below
+        )
+        let sellTransaction = makeTransaction(
+            date: "01/15/2025",
+            action: "Sell",
+            symbol: "NVDA",
+            description: "NVIDIA CORP",
+            quantity: "50",
+            price: "$130.00",
+            amount: "$6,500.00",
+            itemIssueId: "382397811"  // Same ItemIssueId
+        )
+        let dividendTransaction = makeTransaction(
+            date: "12/27/2024",
+            action: "Qualified Dividend",
+            symbol: "NVDA",
+            description: "NVIDIA CORP",
+            amount: "$2.87",
+            itemIssueId: "382397811"  // Same ItemIssueId
+        )
+        let taxTransaction = makeTransaction(
+            date: "12/27/2024",
+            action: "NRA Tax Adj",
+            symbol: "NVDA",
+            description: "NVIDIA CORP",
+            amount: "-$0.86",
+            itemIssueId: "382397811"  // Same ItemIssueId
+        )
+        let data = makeJSONData(transactions: [
+            buyTransaction,
+            sellTransaction,
+            dividendTransaction,
+            taxTransaction
+        ])
+
+        let trades = try parser.parse(data)
+
+        // All 3 trades should be parsed (dividend + tax merged into 1)
+        #expect(trades.count == 3)
+
+        // Verify each type exists
+        let types = Set(trades.map { $0.type })
+        #expect(types.contains(.stockBuy))
+        #expect(types.contains(.stockSell))
+        #expect(types.contains(.dividend))
+
+        // Verify dividend has correct tax merged
+        let dividend = trades.first { $0.type == .dividend }
+        #expect(dividend?.dividendInfo?.grossAmount == Decimal(string: "2.87"))
+        #expect(dividend?.dividendInfo?.taxWithheld == Decimal(string: "0.86"))
+        #expect(dividend?.totalAmount == Decimal(string: "2.01"))
+
+        // Verify buy/sell amounts
+        let buy = trades.first { $0.type == .stockBuy }
+        #expect(buy?.totalAmount == -12000)  // Negative for buys
+        let sell = trades.first { $0.type == .stockSell }
+        #expect(sell?.totalAmount == 6500)
     }
 
     // MARK: - ADR Fee Parsing Tests
@@ -445,10 +545,10 @@ struct CharlesSchwabParserTests {
         let trade = trades[0]
         #expect(trade.type == .fee)
         #expect(trade.ticker == "TSM")
-        #expect(trade.totalAmount == Decimal(string: "2.50"))
+        #expect(trade.totalAmount == Decimal(string: "-2.50"))  // Fee is cash outflow (negative)
         #expect(trade.feeInfo != nil)
         #expect(trade.feeInfo?.type == .adrMgmtFee)
-        #expect(trade.feeInfo?.amount == Decimal(string: "2.50"))
+        #expect(trade.feeInfo?.amount == Decimal(string: "2.50"))  // feeInfo.amount is absolute value
     }
 
     @Test("ADR Mgmt Fee extracts ticker from description")
@@ -598,7 +698,7 @@ struct CharlesSchwabParserTests {
         let trades = try parser.parse(data)
 
         #expect(trades.count == 1)
-        #expect(trades[0].totalAmount == 150000)
+        #expect(trades[0].totalAmount == -150000)  // Negative for buys
     }
 
     // MARK: - CharlesSchwabActionType Properties Tests

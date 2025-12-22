@@ -5,6 +5,8 @@ import Foundation
 /// The type of fee.
 public enum FeeType: String, Sendable, Codable, CaseIterable {
     case adrMgmtFee = "adr_mgmt_fee"  // ADR Management Fee
+    case tradingCommission = "trading_commission"  // Trading Commission
+    case taxWithholding = "tax_withholding"  // Tax Withholding (NRA, W-8, etc.)
 }
 
 // MARK: - FeeInfo
@@ -35,6 +37,10 @@ public extension FeeInfo {
         switch type {
         case .adrMgmtFee:
             return "ADR Management Fee"
+        case .tradingCommission:
+            return "Trading Commission"
+        case .taxWithholding:
+            return "Tax Withholding"
         }
     }
 }

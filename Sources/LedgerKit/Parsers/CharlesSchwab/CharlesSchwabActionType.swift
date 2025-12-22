@@ -59,7 +59,7 @@ public enum CharlesSchwabActionType: String, Sendable, CaseIterable {
              .cashDividend, .qualifiedDividend, .qualDivReinvest, .reinvestDividend, .reinvestShares, .longTermCapGain,
              .stockSplit,
              .deliveredOther, .receivedOther, .journaledShares, .mandatoryReorgExc,
-             .moneyLinkDeposit, .moneyLinkTransfer,
+             .moneyLinkDeposit, .moneyLinkTransfer, .internalTransfer,
              .nraTaxAdj, .bondInterest, .creditInterest:
             return true
         default:

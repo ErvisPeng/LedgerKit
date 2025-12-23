@@ -32,6 +32,14 @@ public enum CharlesSchwabActionType: String, Sendable, CaseIterable {
     case journaledShares = "Journaled Shares"
     case mandatoryReorgExc = "Mandatory Reorg Exc"
 
+    // Cash flow
+    case fundsDeposited = "Funds Deposited"
+    case fundsWithdrawn = "Funds Withdrawn"
+    case divIntIncome = "Div/Int - Income"
+    case divIntExpense = "Div/Int - Expense"
+    case journalOther = "Journal - Other"
+    case marginInterest = "Margin Interest"
+
     // Other (skip)
     case stockSplit = "Stock Split"
     case cashInLieu = "Cash In Lieu"
@@ -60,7 +68,11 @@ public enum CharlesSchwabActionType: String, Sendable, CaseIterable {
              .stockSplit,
              .deliveredOther, .receivedOther, .journaledShares, .mandatoryReorgExc,
              .moneyLinkDeposit, .moneyLinkTransfer, .internalTransfer,
-             .nraTaxAdj, .bondInterest, .creditInterest:
+             .fundsDeposited, .fundsWithdrawn,
+             .divIntIncome, .divIntExpense,
+             .journalOther, .marginInterest,
+             .nraTaxAdj, .bondInterest, .creditInterest,
+             .cashInLieu, .interestAdj:
             return true
         default:
             return false
@@ -156,13 +168,21 @@ public enum CharlesSchwabActionType: String, Sendable, CaseIterable {
             return .dividend
         case .qualDivReinvest, .reinvestDividend:
             return .dividendReinvest
-        case .moneyLinkDeposit, .moneyLinkTransfer:
+        case .moneyLinkDeposit, .moneyLinkTransfer, .fundsDeposited:
             // Note: Caller should check amount to determine deposit vs withdraw
             return .deposit
+        case .fundsWithdrawn:
+            return .withdraw
         case .bondInterest, .creditInterest:
             return .interestIncome
-        case .nraTaxAdj:
+        case .nraTaxAdj, .journalOther:
             return .taxWithholding
+        case .divIntIncome, .cashInLieu:
+            // Note: Could be dividend or interest - parser will determine
+            // cashInLieu: fractional share cash payment from stock split/merger
+            return .dividend
+        case .divIntExpense, .marginInterest, .interestAdj:
+            return .fee
         default:
             return nil
         }

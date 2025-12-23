@@ -212,7 +212,55 @@ public final class FirstradeParser: BrokerParser, Sendable {
             return parseADRFee(record)
         }
 
-        // 2. Dividend records
+        // 2. Cash Flow - Deposits
+        // Format: Action=Other, RecordType=Financial, Description contains deposit keywords
+        if record.recordType == "Financial" && actionUpper == "OTHER" &&
+           (descriptionUpper.contains("ACH DEPOSIT") ||
+            descriptionUpper.contains("WIRE FUNDS RECEIVED")) {
+            // Skip reverse deposits (they are withdrawals)
+            if !descriptionUpper.contains("REVERSE") {
+                return parseDeposit(record)
+            }
+        }
+
+        // 3. Cash Flow - Withdrawals
+        // Format: Action=Other, RecordType=Financial, Description contains withdrawal keywords
+        if record.recordType == "Financial" && actionUpper == "OTHER" &&
+           (descriptionUpper.contains("WIRE TRANSFER") ||
+            descriptionUpper.contains("REVERSE ACH DEPOSIT") ||
+            descriptionUpper.contains("CASH ADVANCE ATM") ||
+            descriptionUpper.contains("MEMO CASH ADVANCE")) {
+            return parseWithdraw(record)
+        }
+
+        // 3.5. Skip internal transfers (do not affect total assets)
+        if record.recordType == "Financial" && actionUpper == "OTHER" &&
+           (descriptionUpper.contains("XFER MARGIN TO CASH") ||
+            descriptionUpper.contains("XFER CASH TO MARGIN")) {
+            return nil  // Ignore internal transfers
+        }
+
+        // 4. Fee Reimbursements and Rebates (positive amounts -> deposit)
+        // Format: Action=Other, RecordType=Financial, Description contains REIMB or REBATE
+        if record.recordType == "Financial" && actionUpper == "OTHER" &&
+           (descriptionUpper.contains("REIMB") || descriptionUpper.contains("REBATE")) {
+            // Fee reimbursements are income, treat as deposits
+            if record.amount > .zero {
+                return parseDeposit(record)
+            }
+        }
+
+        // 5. Other Fees (Wire fees, ACH fees, Foreign transaction fees)
+        // Format: Action=Other, RecordType=Financial, Description contains FEE
+        if record.recordType == "Financial" && actionUpper == "OTHER" &&
+           descriptionUpper.contains("FEE") {
+            // Skip ADR fees (already handled above)
+            if !descriptionUpper.contains("ADR FEE") {
+                return parseOtherFee(record)
+            }
+        }
+
+        // 5. Dividend records
         if record.recordType == "Financial" && actionUpper == "DIVIDEND" {
             return parseDividend(record)
         }
@@ -427,6 +475,89 @@ public final class FirstradeParser: BrokerParser, Sendable {
         return ParsedTrade(
             type: .fee,
             ticker: symbol,
+            quantity: .zero,
+            price: .zero,
+            totalAmount: amount,
+            tradeDate: record.tradeDate,
+            optionInfo: nil,
+            dividendInfo: nil,
+            feeInfo: feeInfo,
+            note: record.description,
+            rawSource: "Firstrade"
+        )
+    }
+
+    // MARK: - Cash Flow Parsing
+
+    /// Parse deposit record (ACH deposit, wire transfer received).
+    private func parseDeposit(_ record: FirstradeCSVRecord) -> ParsedTrade? {
+        let amount = abs(record.amount)
+        guard amount > .zero else { return nil }
+
+        return ParsedTrade(
+            type: .deposit,
+            ticker: "",  // No ticker for cash deposits
+            quantity: .zero,
+            price: .zero,
+            totalAmount: amount,
+            tradeDate: record.tradeDate,
+            optionInfo: nil,
+            dividendInfo: nil,
+            feeInfo: nil,
+            note: record.description,
+            rawSource: "Firstrade"
+        )
+    }
+
+    /// Parse withdrawal record (wire transfer, reverse ACH deposit).
+    private func parseWithdraw(_ record: FirstradeCSVRecord) -> ParsedTrade? {
+        let amount = abs(record.amount)
+        guard amount > .zero else { return nil }
+
+        return ParsedTrade(
+            type: .withdraw,
+            ticker: "",  // No ticker for cash withdrawals
+            quantity: .zero,
+            price: .zero,
+            totalAmount: amount,
+            tradeDate: record.tradeDate,
+            optionInfo: nil,
+            dividendInfo: nil,
+            feeInfo: nil,
+            note: record.description,
+            rawSource: "Firstrade"
+        )
+    }
+
+    /// Parse other fee record (wire fee, ACH fee, rebates).
+    private func parseOtherFee(_ record: FirstradeCSVRecord) -> ParsedTrade? {
+        let amount = abs(record.amount)
+        guard amount > .zero else { return nil }
+
+        // Determine fee type from description
+        let descUpper = record.description.uppercased()
+        let feeType: FeeType
+        if descUpper.contains("FOREIGN") && (descUpper.contains("TRANSACTION") || descUpper.contains("CARD")) {
+            // Foreign transaction fee (ATM, debit card, etc.)
+            feeType = .foreignTransactionFee
+        } else if descUpper.contains("WIRE") {
+            feeType = .wireFee
+        } else if descUpper.contains("ACH") {
+            feeType = .achFee
+        } else if descUpper.contains("REBATE") {
+            feeType = .other
+        } else {
+            feeType = .other
+        }
+
+        let feeInfo = FeeInfo(
+            type: feeType,
+            amount: amount
+        )
+
+        return ParsedTrade(
+            type: .fee,
+            ticker: "",  // No ticker for fees
             quantity: .zero,
             price: .zero,
             totalAmount: amount,

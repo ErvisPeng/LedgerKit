@@ -231,7 +231,9 @@ struct FirstradeParserTests {
         let trades = parser.extractTrades(from: records)
 
         #expect(records.count == 1)
-        #expect(trades.count == 0)
+        // MEMO CASH ADVANCE ATM is now parsed as withdraw
+        #expect(trades.count == 1)
+        #expect(trades.first?.type == .withdraw)
     }
 
     // MARK: - Option Description Parsing Tests
@@ -292,13 +294,15 @@ struct FirstradeParserTests {
         let trades = parser.extractTrades(from: records)
 
         #expect(records.count == 4)
-        #expect(trades.count == 3)
+        // otherRecord (MEMO CASH ADVANCE ATM) is now parsed as withdraw
+        #expect(trades.count == 4)
 
         // Trades should be sorted by date
         let types = trades.map { $0.type }
         #expect(types.contains(.stockBuy))
         #expect(types.contains(.optionSellToOpen))
         #expect(types.contains(.dividend))
+        #expect(types.contains(.withdraw))
     }
 
     // MARK: - Date Parsing Tests
@@ -390,5 +394,50 @@ struct FirstradeParserTests {
 
         #expect(trades.count == 1)
         #expect(warnings.isEmpty)
+    }
+
+    // MARK: - Dividend with Tax Withholding Tests
+
+    @Test("Dividend reinvestment with tax withholding is parsed correctly")
+    func dividendReinvestmentWithTaxParsed() throws {
+        let csv = """
+            \(validCSVHeader)
+            KO          ,0.05252,,Other,COCA COLA COMPANY (THE) REIN @  70.8300 REC 12/01/25 PAY 12/15/25 FLEET MEEHAN SPECIALIST IS A SPECIALIST IN THIS STOCK  ,2025-12-15,2025-12-15,0.00,-3.72,0.00,0.00,191216100,Financial
+            KO          ,0.00,,Dividend,COCA COLA COMPANY (THE) SUBST PAY ON       9 SHS REC 12/01/25 PAY 12/15/25 IN LIEU OF DIVIDEND NON-RES TAX WITHHELD  $1.38,2025-12-15,2025-12-15,0.00,4.59,0.00,0.00,191216100,Financial
+            KO          ,0.00,,Dividend,COCA COLA COMPANY (THE) CASH DIV  ON 1.42524 SHS REC 12/01/25 PAY 12/15/25 NON-RES TAX WITHHELD  $0.22,2025-12-15,2025-12-15,0.00,0.73,0.00,0.00,191216100,Financial
+            """
+        let data = csv.data(using: .utf8)!
+
+        let records = try parser.parseCSV(data)
+        let trades = parser.extractTrades(from: records)
+
+        // Should parse 3 trades: 1 dividendReinvest + 2 dividends
+        #expect(trades.count == 3)
+
+        // First trade: Dividend Reinvestment (REIN)
+        let reinvest = trades[0]
+        #expect(reinvest.type == .dividendReinvest)
+        #expect(reinvest.ticker == "KO")
+        #expect(reinvest.quantity == Decimal(string: "0.05252"))
+        #expect(reinvest.price == Decimal(string: "70.8300"))
+        #expect(reinvest.totalAmount == Decimal(string: "3.72"))
+
+        // Second trade: SUBST PAY dividend
+        let substPay = trades[1]
+        #expect(substPay.type == .dividend)
+        #expect(substPay.ticker == "KO")
+        #expect(substPay.dividendInfo != nil)
+        #expect(substPay.dividendInfo?.taxWithheld == Decimal(string: "1.38"))
+        #expect(substPay.dividendInfo?.netAmount == Decimal(string: "4.59"))
+        #expect(substPay.dividendInfo?.grossAmount == Decimal(string: "5.97"))  // 4.59 + 1.38
+
+        // Third trade: CASH DIV dividend
+        let cashDiv = trades[2]
+        #expect(cashDiv.type == .dividend)
+        #expect(cashDiv.ticker == "KO")
+        #expect(cashDiv.dividendInfo != nil)
+        #expect(cashDiv.dividendInfo?.taxWithheld == Decimal(string: "0.22"))
+        #expect(cashDiv.dividendInfo?.netAmount == Decimal(string: "0.73"))
+        #expect(cashDiv.dividendInfo?.grossAmount == Decimal(string: "0.95"))  // 0.73 + 0.22
     }
 }

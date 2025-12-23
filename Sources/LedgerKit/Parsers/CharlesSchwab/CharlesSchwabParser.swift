@@ -558,9 +558,17 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         }
 
         // Cash transfers (deposits/withdraws)
-        if actionType == .moneyLinkDeposit || actionType == .moneyLinkTransfer {
-            // Determine deposit vs withdraw based on amount sign
-            let tradeType: ParsedTradeType = amount >= 0 ? .deposit : .withdraw
+        if actionType == .moneyLinkDeposit || actionType == .moneyLinkTransfer ||
+           actionType == .fundsDeposited || actionType == .fundsWithdrawn {
+            // Determine deposit vs withdraw based on amount sign or action type
+            let tradeType: ParsedTradeType
+            if actionType == .fundsWithdrawn {
+                tradeType = .withdraw
+            } else if actionType == .fundsDeposited {
+                tradeType = .deposit
+            } else {
+                tradeType = amount >= 0 ? .deposit : .withdraw
+            }
 
             return ParsedTrade(
                 type: tradeType,
@@ -629,9 +637,50 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             )
         }
 
+        // Cash In Lieu (fractional share cash payment from stock split/merger)
+        if actionType == .cashInLieu {
+            guard abs(amount) > 0 else { return nil }  // Skip zero-amount records
+
+            return ParsedTrade(
+                type: .dividend,
+                ticker: record.symbol.trimmingCharacters(in: .whitespaces).uppercased(),
+                quantity: 0,
+                price: 0,
+                totalAmount: abs(amount),  // Cash received (positive)
+                tradeDate: parsedDate,
+                optionInfo: nil,
+                note: "\(record.action): \(record.description)",
+                rawSource: "Charles Schwab"
+            )
+        }
+
+        // Interest Adjustment (margin interest adjustment)
+        if actionType == .interestAdj {
+            guard abs(amount) > 0 else { return nil }  // Skip zero-amount records
+
+            return ParsedTrade(
+                type: .fee,
+                ticker: "",  // No symbol for interest adjustment
+                quantity: 0,
+                price: 0,
+                totalAmount: amount,  // Keep original sign (usually negative for expense)
+                tradeDate: parsedDate,
+                optionInfo: nil,
+                note: "\(record.action): \(record.description)",
+                rawSource: "Charles Schwab"
+            )
+        }
+
         // Dividend reinvest
+        // Note: CS has two separate records for dividend reinvestment:
+        // 1. "Qual Div Reinvest" / "Reinvest Dividend" - dividend income (often empty symbol/quantity)
+        // 2. "Reinvest Shares" - actual stock purchase (has symbol, quantity, price)
+        // We skip #1 if symbol is empty, and let #2 be handled as stockBuy
         if actionType == .qualDivReinvest || actionType == .reinvestDividend {
             let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
+
+            // Skip if symbol is empty or quantity is zero (will be handled by "Reinvest Shares")
+            guard !symbol.isEmpty, abs(quantity) > 0 else { return nil }
 
             return ParsedTrade(
                 type: .dividendReinvest,
@@ -726,6 +775,8 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
 
     /// Parse date string.
     /// Format: MM/DD/YYYY or MM/DD/YYYY as of MM/DD/YYYY
+    /// Parse date string.
+    /// Format: MM/DD/YYYY or MM/DD/YYYY as of MM/DD/YYYY
     private func parseDate(_ dateString: String) -> Date? {
         let trimmed = dateString.trimmingCharacters(in: .whitespaces)
 
@@ -737,7 +788,35 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             primaryDate = trimmed
         }
 
-        return Self.tradeDateFormatter.date(from: primaryDate)
+        // Parse using existing formatter to get a Date (ignoring time/zone correctness for a moment)
+        guard let date = Self.tradeDateFormatter.date(from: primaryDate) else {
+            return nil
+        }
+        
+        // Manual component parsing to be independent of formatter's timezone assumptions
+        let components = primaryDate.split(separator: "/")
+        guard components.count == 3,
+              let month = Int(components[0]),
+              let day = Int(components[1]),
+              let year = Int(components[2]) else {
+            return nil
+        }
+
+        // Construct date at 09:30 AM America/New_York
+        var calendar = Calendar(identifier: .gregorian)
+        if let nyTimeZone = TimeZone(identifier: "America/New_York") {
+            calendar.timeZone = nyTimeZone
+        }
+        
+        var dateComponents = DateComponents()
+        dateComponents.year = year
+        dateComponents.month = month
+        dateComponents.day = day
+        dateComponents.hour = 9
+        dateComponents.minute = 30
+        dateComponents.second = 0
+        
+        return calendar.date(from: dateComponents)
     }
 
     /// Parse quantity string.

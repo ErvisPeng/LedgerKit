@@ -775,6 +775,8 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
 
     /// Parse date string.
     /// Format: MM/DD/YYYY or MM/DD/YYYY as of MM/DD/YYYY
+    /// Parse date string.
+    /// Format: MM/DD/YYYY or MM/DD/YYYY as of MM/DD/YYYY
     private func parseDate(_ dateString: String) -> Date? {
         let trimmed = dateString.trimmingCharacters(in: .whitespaces)
 
@@ -786,7 +788,35 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             primaryDate = trimmed
         }
 
-        return Self.tradeDateFormatter.date(from: primaryDate)
+        // Parse using existing formatter to get a Date (ignoring time/zone correctness for a moment)
+        guard let date = Self.tradeDateFormatter.date(from: primaryDate) else {
+            return nil
+        }
+        
+        // Manual component parsing to be independent of formatter's timezone assumptions
+        let components = primaryDate.split(separator: "/")
+        guard components.count == 3,
+              let month = Int(components[0]),
+              let day = Int(components[1]),
+              let year = Int(components[2]) else {
+            return nil
+        }
+
+        // Construct date at 09:30 AM America/New_York
+        var calendar = Calendar(identifier: .gregorian)
+        if let nyTimeZone = TimeZone(identifier: "America/New_York") {
+            calendar.timeZone = nyTimeZone
+        }
+        
+        var dateComponents = DateComponents()
+        dateComponents.year = year
+        dateComponents.month = month
+        dateComponents.day = day
+        dateComponents.hour = 9
+        dateComponents.minute = 30
+        dateComponents.second = 0
+        
+        return calendar.date(from: dateComponents)
     }
 
     /// Parse quantity string.

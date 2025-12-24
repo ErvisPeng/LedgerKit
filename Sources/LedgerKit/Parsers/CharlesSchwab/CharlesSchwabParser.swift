@@ -73,7 +73,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         from records: [CharlesSchwabRawTransaction]
     ) -> ([ParsedTrade], [String]) {
         var trades: [ParsedTrade] = []
-        let warnings: [String] = []
+        var warnings: [String] = []
 
         // Build company name to ticker mapping for CUSIP resolution
         let companyTickerMap = buildCompanyTickerMap(from: records)
@@ -110,8 +110,12 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             }
 
             // All other record types - normal processing
-            if let trade = parseTrade(from: record, companyTickerMap: companyTickerMap) {
+            let (trade, warning) = parseTrade(from: record, companyTickerMap: companyTickerMap)
+            if let trade = trade {
                 trades.append(trade)
+            }
+            if let warning = warning {
+                warnings.append(warning)
             }
         }
 
@@ -336,27 +340,28 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
     // MARK: - Trade Parsing
 
     /// Parse trade from raw record.
+    /// - Returns: Tuple of (ParsedTrade?, warning message?)
     private func parseTrade(
         from record: CharlesSchwabRawTransaction,
         companyTickerMap: [String: String] = [:]
-    ) -> ParsedTrade? {
+    ) -> (ParsedTrade?, String?) {
         // Handle ADR Mgmt Fee
         if record.action == "ADR Mgmt Fee" {
-            return parseADRFee(record)
+            return (parseADRFee(record), nil)
         }
 
         // Handle NRA Tax Adj - skip (handled in merge)
         if record.action == "NRA Tax Adj" {
-            return nil
+            return (nil, nil)
         }
 
         guard let actionType = CharlesSchwabActionType(rawAction: record.action),
               actionType.shouldImport else {
-            return nil
+            return (nil, nil)
         }
 
         guard let parsedDate = parseDate(record.date) else {
-            return nil
+            return (nil, nil)
         }
 
         let quantity = parseQuantity(record.quantity)
@@ -372,14 +377,14 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         // Option trades
         if actionType.isOptionTrade {
             guard let optionInfo = parseOptionSymbol(record.symbol) else {
-                return nil
+                return (nil, nil)
             }
 
             guard let tradeType = actionType.toParsedTradeType() else {
-                return nil
+                return (nil, nil)
             }
 
-            return ParsedTrade(
+            return (ParsedTrade(
                 type: tradeType,
                 ticker: optionInfo.underlyingTicker,
                 quantity: abs(quantity),
@@ -391,16 +396,16 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 feeInfo: tradeFeeInfo,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
-            )
+            ), nil)
         }
 
         // Dividends (standalone, not merged)
         if actionType.isDividend {
             let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
-            guard !symbol.isEmpty else { return nil }
+            guard !symbol.isEmpty else { return (nil, nil) }
 
             let dividendAmount = abs(amount)
-            guard dividendAmount > .zero else { return nil }
+            guard dividendAmount > .zero else { return (nil, nil) }
 
             // Determine dividend type
             let dividendType: DividendType
@@ -420,7 +425,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 issueId: record.itemIssueId.isEmpty ? nil : record.itemIssueId
             )
 
-            return ParsedTrade(
+            return (ParsedTrade(
                 type: .dividend,
                 ticker: symbol.uppercased(),
                 quantity: .zero,
@@ -432,15 +437,15 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 feeInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
-            )
+            ), nil)
         }
 
         // Stock Split - treat as zero-cost buy
         if actionType == .stockSplit {
             let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
-            guard !symbol.isEmpty else { return nil }
+            guard !symbol.isEmpty else { return (nil, nil) }
 
-            return ParsedTrade(
+            return (ParsedTrade(
                 type: .stockBuy,
                 ticker: symbol.uppercased(),
                 quantity: abs(quantity),
@@ -452,7 +457,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 feeInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
-            )
+            ), nil)
         }
 
         // Symbol exchange / Corporate actions
@@ -464,9 +469,9 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 // Stock Split (from TDA migration)
                 if descUpper.contains("STOCK SPLIT") {
                     let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
-                    guard !symbol.isEmpty else { return nil }
+                    guard !symbol.isEmpty else { return (nil, nil) }
 
-                    return ParsedTrade(
+                    return (ParsedTrade(
                         type: .stockBuy,
                         ticker: symbol.uppercased(),
                         quantity: abs(quantity),
@@ -478,7 +483,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                         feeInfo: nil,
                         note: "\(record.action): \(record.description)",
                         rawSource: "Charles Schwab"
-                    )
+                    ), nil)
                 }
 
                 // W-8 Withholding (TDA TRAN - W-8 WITHHOLDING)
@@ -491,7 +496,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                         symbol = String(record.description[openParen.upperBound..<closeParen.lowerBound])
                     }
 
-                    return ParsedTrade(
+                    return (ParsedTrade(
                         type: .taxWithholding,
                         ticker: symbol.uppercased(),
                         quantity: 0,
@@ -501,14 +506,14 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                         optionInfo: nil,
                         note: "\(record.action): \(record.description)",
                         rawSource: "Charles Schwab"
-                    )
+                    ), nil)
                 }
 
                 // CASH MOVEMENT (TDA TRAN - CASH MOVEMENT OF...)
                 // These represent cash transfers during account migrations and should be recorded
                 if descUpper.contains("CASH MOVEMENT") && abs(amount) > 0 {
                     let tradeType: ParsedTradeType = amount >= 0 ? .deposit : .withdraw
-                    return ParsedTrade(
+                    return (ParsedTrade(
                         type: tradeType,
                         ticker: "",
                         quantity: 0,
@@ -518,17 +523,17 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                         optionInfo: nil,
                         note: "\(record.action): \(record.description)",
                         rawSource: "Charles Schwab"
-                    )
+                    ), nil)
                 }
 
                 // Symbol exchange (SPAC mergers, etc.)
                 guard descUpper.contains("EXCHANGE") else {
-                    return nil  // Not exchange, split, withholding, or cash movement - skip
+                    return (nil, nil)  // Not exchange, split, withholding, or cash movement - skip
                 }
             }
 
             var symbol = record.symbol.trimmingCharacters(in: .whitespaces)
-            guard !symbol.isEmpty else { return nil }
+            guard !symbol.isEmpty else { return (nil, nil) }
 
             // If symbol is CUSIP, try to look up ticker from map
             if isCUSIP(symbol) {
@@ -536,13 +541,15 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                    let ticker = companyTickerMap[companyName] {
                     symbol = ticker
                 } else {
-                    return nil  // Cannot resolve, skip
+                    // Cannot resolve CUSIP to ticker - return warning
+                    let warning = "無法解析 CUSIP '\(symbol)': \(record.action) - \(record.description) (數量: \(record.quantity))"
+                    return (nil, warning)
                 }
             }
 
             let tradeType: ParsedTradeType = quantity < .zero ? .symbolExchangeOut : .symbolExchangeIn
 
-            return ParsedTrade(
+            return (ParsedTrade(
                 type: tradeType,
                 ticker: symbol.uppercased(),
                 quantity: abs(quantity),
@@ -554,7 +561,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 feeInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
-            )
+            ), nil)
         }
 
         // Cash transfers (deposits/withdraws)
@@ -570,7 +577,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 tradeType = amount >= 0 ? .deposit : .withdraw
             }
 
-            return ParsedTrade(
+            return (ParsedTrade(
                 type: tradeType,
                 ticker: "",  // No symbol for cash transfers
                 quantity: 0,
@@ -580,17 +587,17 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 optionInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
-            )
+            ), nil)
         }
 
         // Internal Transfer (account migrations)
         if actionType == .internalTransfer {
-            guard abs(amount) > 0 else { return nil }  // Skip stock-only transfers (no cash)
+            guard abs(amount) > 0 else { return (nil, nil) }  // Skip stock-only transfers (no cash)
 
             // Determine deposit vs withdraw based on amount sign
             let tradeType: ParsedTradeType = amount >= 0 ? .deposit : .withdraw
 
-            return ParsedTrade(
+            return (ParsedTrade(
                 type: tradeType,
                 ticker: "",  // No symbol for cash transfers
                 quantity: 0,
@@ -600,14 +607,14 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 optionInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
-            )
+            ), nil)
         }
 
         // Interest income (Bond Interest, Credit Interest)
         if actionType == .bondInterest || actionType == .creditInterest {
-            guard abs(amount) > 0 else { return nil }  // Skip zero-amount records
+            guard abs(amount) > 0 else { return (nil, nil) }  // Skip zero-amount records
 
-            return ParsedTrade(
+            return (ParsedTrade(
                 type: .interestIncome,
                 ticker: "",  // No symbol for interest
                 quantity: 0,
@@ -617,14 +624,14 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 optionInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
-            )
+            ), nil)
         }
 
         // Tax withholding (NRA Tax Adj)
         if actionType == .nraTaxAdj {
-            guard abs(amount) > 0 else { return nil }  // Skip zero-amount records
+            guard abs(amount) > 0 else { return (nil, nil) }  // Skip zero-amount records
 
-            return ParsedTrade(
+            return (ParsedTrade(
                 type: .taxWithholding,
                 ticker: record.symbol.trimmingCharacters(in: .whitespaces),  // Keep related symbol
                 quantity: 0,
@@ -634,14 +641,14 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 optionInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
-            )
+            ), nil)
         }
 
         // Cash In Lieu (fractional share cash payment from stock split/merger)
         if actionType == .cashInLieu {
-            guard abs(amount) > 0 else { return nil }  // Skip zero-amount records
+            guard abs(amount) > 0 else { return (nil, nil) }  // Skip zero-amount records
 
-            return ParsedTrade(
+            return (ParsedTrade(
                 type: .dividend,
                 ticker: record.symbol.trimmingCharacters(in: .whitespaces).uppercased(),
                 quantity: 0,
@@ -651,14 +658,14 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 optionInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
-            )
+            ), nil)
         }
 
         // Interest Adjustment (margin interest adjustment)
         if actionType == .interestAdj {
-            guard abs(amount) > 0 else { return nil }  // Skip zero-amount records
+            guard abs(amount) > 0 else { return (nil, nil) }  // Skip zero-amount records
 
-            return ParsedTrade(
+            return (ParsedTrade(
                 type: .fee,
                 ticker: "",  // No symbol for interest adjustment
                 quantity: 0,
@@ -668,7 +675,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 optionInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
-            )
+            ), nil)
         }
 
         // Journal - Other: FOREIGN WITHHOLDING (tax withholding from foreign dividends)
@@ -677,13 +684,13 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             let descUpper = record.description.uppercased()
 
             if descUpper.contains("FOREIGN WITHHOLDING") || descUpper.contains("WITHHOLDING") {
-                guard abs(amount) > 0 else { return nil }  // Skip zero-amount records
+                guard abs(amount) > 0 else { return (nil, nil) }  // Skip zero-amount records
 
                 // Try to extract symbol from CUSIP if possible, otherwise leave empty
                 // Symbol field contains CUSIP like "13462K109", not ticker
                 let ticker = ""  // Cannot resolve CUSIP to ticker without mapping
 
-                return ParsedTrade(
+                return (ParsedTrade(
                     type: .taxWithholding,
                     ticker: ticker,
                     quantity: 0,
@@ -694,11 +701,11 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                     feeInfo: FeeInfo(type: .taxWithholding, amount: abs(amount)),
                     note: "\(record.action): \(record.description)",
                     rawSource: "Charles Schwab"
-                )
+                ), nil)
             }
 
             // Other Journal - Other records without known patterns are skipped
-            return nil
+            return (nil, nil)
         }
 
         // Dividend reinvest
@@ -710,9 +717,9 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
 
             // Skip if symbol is empty or quantity is zero (will be handled by "Reinvest Shares")
-            guard !symbol.isEmpty, abs(quantity) > 0 else { return nil }
+            guard !symbol.isEmpty, abs(quantity) > 0 else { return (nil, nil) }
 
-            return ParsedTrade(
+            return (ParsedTrade(
                 type: .dividendReinvest,
                 ticker: symbol.uppercased(),
                 quantity: abs(quantity),
@@ -722,12 +729,12 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 optionInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
-            )
+            ), nil)
         }
 
         // Stock trades (including Reinvest Shares)
         var symbol = record.symbol.trimmingCharacters(in: .whitespaces)
-        guard !symbol.isEmpty else { return nil }
+        guard !symbol.isEmpty else { return (nil, nil) }
 
         // If symbol is CUSIP, try to look up ticker from map
         if isCUSIP(symbol) {
@@ -735,15 +742,17 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                let ticker = companyTickerMap[companyName] {
                 symbol = ticker
             } else {
-                return nil  // Cannot resolve, skip
+                // Cannot resolve CUSIP to ticker - return warning
+                let warning = "無法解析 CUSIP '\(symbol)': \(record.action) - \(record.description) (數量: \(record.quantity))"
+                return (nil, warning)
             }
         }
 
         guard let tradeType = actionType.toParsedTradeType() else {
-            return nil
+            return (nil, nil)
         }
 
-        return ParsedTrade(
+        return (ParsedTrade(
             type: tradeType,
             ticker: symbol.uppercased(),
             quantity: abs(quantity),
@@ -755,7 +764,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             feeInfo: tradeFeeInfo,
             note: "\(record.action): \(record.description)",
             rawSource: "Charles Schwab"
-        )
+        ), nil)
     }
 
     // MARK: - ADR Fee Parsing

@@ -33,6 +33,7 @@ public enum ParsedTradeType: String, Sendable, CaseIterable, Codable {
 
     // Other income/expense types
     case interestIncome = "interest_income"
+    case marginInterest = "margin_interest"
     case taxWithholding = "tax_withholding"
 
     /// Whether this trade type represents a buy action.
@@ -117,6 +118,7 @@ public enum ParsedTradeType: String, Sendable, CaseIterable, Codable {
         case .deposit: return "Deposit"
         case .withdraw: return "Withdraw"
         case .interestIncome: return "Interest Income"
+        case .marginInterest: return "Margin Interest"
         case .taxWithholding: return "Tax Withholding"
         }
     }

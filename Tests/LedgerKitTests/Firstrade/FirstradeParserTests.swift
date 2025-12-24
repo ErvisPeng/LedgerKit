@@ -440,4 +440,59 @@ struct FirstradeParserTests {
         #expect(cashDiv.dividendInfo?.netAmount == Decimal(string: "0.73"))
         #expect(cashDiv.dividendInfo?.grossAmount == Decimal(string: "0.95"))  // 0.73 + 0.22
     }
+
+    // MARK: - Interest Parsing Tests
+
+    @Test("Credit interest on cash balance is parsed correctly")
+    func creditInterestParsed() throws {
+        let csv = """
+            \(validCSVHeader)
+            ,0.00,,Interest,INTEREST ON CREDIT BALANCE AT  0.450  06/16 THRU 07/15      ,2023-07-17,2023-07-17,0.00,1.4,0.00,0.00,00099A109,Financial
+            """
+        let data = csv.data(using: .utf8)!
+
+        let records = try parser.parseCSV(data)
+        let trades = parser.extractTrades(from: records)
+
+        #expect(trades.count == 1)
+        #expect(trades[0].type == .interestIncome)
+        #expect(trades[0].ticker == "")
+        #expect(trades[0].totalAmount == Decimal(string: "1.4"))
+        #expect(trades[0].note.contains("INTEREST ON CREDIT BALANCE"))
+    }
+
+    @Test("Securities lending rebate is parsed correctly")
+    func securitiesLendingRebateParsed() throws {
+        let csv = """
+            \(validCSVHeader)
+            ,0.00,,Interest,FULLYPAID LENDING REBATE Apr2024 REBATE NON-RES TAX WITHHELD DUE 12/31/2035      0.000    $0.14,2024-05-13,2024-05-13,0.00,0.46,0.00,0.00,         ,Financial
+            """
+        let data = csv.data(using: .utf8)!
+
+        let records = try parser.parseCSV(data)
+        let trades = parser.extractTrades(from: records)
+
+        #expect(trades.count == 1)
+        #expect(trades[0].type == .interestIncome)
+        #expect(trades[0].ticker == "")
+        #expect(trades[0].totalAmount == Decimal(string: "0.46"))
+        #expect(trades[0].note.contains("LENDING REBATE"))
+    }
+
+    @Test("Margin interest expense is parsed correctly")
+    func marginInterestParsed() throws {
+        let csv = """
+            \(validCSVHeader)
+            ,0.00,,Interest,FROM 08/16 THRU 09/15 @13 3/4 BAL       10-  AVBAL      512      ,2024-09-16,2024-09-16,0.00,-6.06,0.00,0.00,         ,Financial
+            """
+        let data = csv.data(using: .utf8)!
+
+        let records = try parser.parseCSV(data)
+        let trades = parser.extractTrades(from: records)
+
+        #expect(trades.count == 1)
+        #expect(trades[0].type == .marginInterest)
+        #expect(trades[0].ticker == "")
+        #expect(trades[0].totalAmount == Decimal(string: "-6.06"))
+    }
 }

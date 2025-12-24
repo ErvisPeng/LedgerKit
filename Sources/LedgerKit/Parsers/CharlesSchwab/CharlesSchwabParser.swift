@@ -671,6 +671,36 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             )
         }
 
+        // Journal - Other: FOREIGN WITHHOLDING (tax withholding from foreign dividends)
+        // These have CUSIP in symbol field and description like "FOREIGN WITHHOLDING 31046423609"
+        if actionType == .journalOther {
+            let descUpper = record.description.uppercased()
+
+            if descUpper.contains("FOREIGN WITHHOLDING") || descUpper.contains("WITHHOLDING") {
+                guard abs(amount) > 0 else { return nil }  // Skip zero-amount records
+
+                // Try to extract symbol from CUSIP if possible, otherwise leave empty
+                // Symbol field contains CUSIP like "13462K109", not ticker
+                let ticker = ""  // Cannot resolve CUSIP to ticker without mapping
+
+                return ParsedTrade(
+                    type: .taxWithholding,
+                    ticker: ticker,
+                    quantity: 0,
+                    price: 0,
+                    totalAmount: -abs(amount),  // Tax is cash outflow (negative)
+                    tradeDate: parsedDate,
+                    optionInfo: nil,
+                    feeInfo: FeeInfo(type: .taxWithholding, amount: abs(amount)),
+                    note: "\(record.action): \(record.description)",
+                    rawSource: "Charles Schwab"
+                )
+            }
+
+            // Other Journal - Other records without known patterns are skipped
+            return nil
+        }
+
         // Dividend reinvest
         // Note: CS has two separate records for dividend reinvestment:
         // 1. "Qual Div Reinvest" / "Reinvest Dividend" - dividend income (often empty symbol/quantity)

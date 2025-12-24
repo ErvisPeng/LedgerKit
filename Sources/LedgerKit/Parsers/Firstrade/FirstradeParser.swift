@@ -265,6 +265,11 @@ public final class FirstradeParser: BrokerParser, Sendable {
             return parseDividend(record)
         }
 
+        // 6. Interest records (credit interest, lending rebate, margin interest)
+        if record.recordType == "Financial" && actionUpper == "INTEREST" {
+            return parseInterest(record)
+        }
+
         // 3. Dividend Reinvestment (DRIP)
         // Format: Action=Other, RecordType=Financial, Description contains "REIN @"
         if record.recordType == "Financial" && actionUpper == "OTHER" &&
@@ -653,6 +658,89 @@ public final class FirstradeParser: BrokerParser, Sendable {
 
         let priceStr = String(description[priceRange])
         return Decimal(string: priceStr)
+    }
+
+    /// Parse interest record (credit interest, lending rebate, margin interest).
+    /// - Credit interest: "INTEREST ON CREDIT BALANCE" (positive)
+    /// - Lending rebate: "LENDING REBATE" or "FULLYPAID LENDING" (positive)
+    /// - Margin interest: negative amount (debit balance interest)
+    private func parseInterest(_ record: FirstradeCSVRecord) -> ParsedTrade? {
+        let descriptionUpper = record.description.uppercased()
+
+        // 1. Credit interest (interest on cash balance)
+        // Pattern: "INTEREST ON CREDIT BALANCE AT 0.450 06/16 THRU 07/15"
+        if descriptionUpper.contains("INTEREST ON CREDIT BALANCE") {
+            return ParsedTrade(
+                type: .interestIncome,
+                ticker: "",
+                quantity: .zero,
+                price: .zero,
+                totalAmount: record.amount,
+                tradeDate: record.tradeDate,
+                optionInfo: nil,
+                dividendInfo: nil,
+                feeInfo: nil,
+                note: record.description,
+                rawSource: "Firstrade"
+            )
+        }
+
+        // 2. Securities lending rebate
+        // Pattern: "FULLYPAID LENDING REBATE" or contains "LENDING REBATE"
+        if descriptionUpper.contains("LENDING REBATE") ||
+           descriptionUpper.contains("FULLYPAID LENDING") {
+            return ParsedTrade(
+                type: .interestIncome,
+                ticker: "",
+                quantity: .zero,
+                price: .zero,
+                totalAmount: record.amount,
+                tradeDate: record.tradeDate,
+                optionInfo: nil,
+                dividendInfo: nil,
+                feeInfo: nil,
+                note: record.description,
+                rawSource: "Firstrade"
+            )
+        }
+
+        // 3. Margin interest (negative amount = expense)
+        // Pattern: "FROM xx/xx THRU xx/xx @rate" with negative amount
+        if record.amount < .zero {
+            return ParsedTrade(
+                type: .marginInterest,
+                ticker: "",
+                quantity: .zero,
+                price: .zero,
+                totalAmount: record.amount,
+                tradeDate: record.tradeDate,
+                optionInfo: nil,
+                dividendInfo: nil,
+                feeInfo: nil,
+                note: record.description,
+                rawSource: "Firstrade"
+            )
+        }
+
+        // 4. Other positive interest income (fallback)
+        if record.amount > .zero {
+            return ParsedTrade(
+                type: .interestIncome,
+                ticker: "",
+                quantity: .zero,
+                price: .zero,
+                totalAmount: record.amount,
+                tradeDate: record.tradeDate,
+                optionInfo: nil,
+                dividendInfo: nil,
+                feeInfo: nil,
+                note: record.description,
+                rawSource: "Firstrade"
+            )
+        }
+
+        // Zero amount - ignore
+        return nil
     }
 }
 

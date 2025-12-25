@@ -768,6 +768,98 @@ struct CharlesSchwabParserTests {
         #expect(warnings.isEmpty)
     }
 
+    // MARK: - CUSIP Resolution Tests
+
+    @Test("CUSIP symbol is resolved to ticker via company name")
+    func cusipResolvedToTicker() throws {
+        // Scenario: SPAC merger - original buy has ticker, delivered has CUSIP
+        let buyTransaction = makeTransaction(
+            date: "02/24/2021",
+            action: "Buy",
+            symbol: "CAPA",
+            description: "HIGHCAPE CAP ACQUISITION CORP COM CL A",
+            quantity: "2",
+            price: "$10.00",
+            amount: "-$20.00"
+        )
+        let deliveredTransaction = makeTransaction(
+            date: "06/11/2021",
+            action: "Delivered - Other",
+            symbol: "42984L105",  // CUSIP instead of ticker
+            description: "HIGHCAPE CAP ACQUISITION CORP 1:1 R/S 6/1//21 74765K105 1:1 EXCHANGE TO QUANTUM-SI INC 74765K105 Auto Reorg#537627ISTOCK PAYMENT",
+            quantity: "-2"
+        )
+        let data = makeJSONData(transactions: [buyTransaction, deliveredTransaction])
+
+        let (trades, warnings) = try parser.parseWithWarnings(data)
+
+        // Should have 2 trades: buy + exchange out
+        #expect(trades.count == 2, "Expected 2 trades but got \(trades.count)")
+
+        // Verify the exchange out uses the resolved ticker
+        let exchangeOut = trades.first { $0.type == .symbolExchangeOut }
+        #expect(exchangeOut != nil, "Expected symbolExchangeOut trade")
+        #expect(exchangeOut?.ticker == "CAPA", "Expected ticker CAPA but got \(exchangeOut?.ticker ?? "nil")")
+
+        // Should have no warnings
+        #expect(warnings.isEmpty, "Expected no warnings but got: \(warnings)")
+    }
+
+    @Test("Company name normalization handles CORP vs CO variation")
+    func companyNameNormalizationHandlesCorpVsCo() throws {
+        // First record has "CORP", second has "CO" - should match after normalization
+        let buyTransaction = makeTransaction(
+            date: "01/01/2021",
+            action: "Buy",
+            symbol: "STPK",
+            description: "STAR PEAK ENERGY TRANSITION CORP COM CL A",
+            quantity: "10",
+            price: "$20.00",
+            amount: "-$200.00"
+        )
+        let deliveredTransaction = makeTransaction(
+            date: "04/29/2021",
+            action: "Delivered - Other",
+            symbol: "85859N102",  // CUSIP
+            description: "STAR PEAK ENERGY TRANSITION CO 1:1 EXC 4/29/21 85859N102 1:1 EXCHANGE TO STEM INC 85859N102 Auto Reorg#530199ISTOCK PAYMENT",
+            quantity: "-10"
+        )
+        let data = makeJSONData(transactions: [buyTransaction, deliveredTransaction])
+
+        let (trades, warnings) = try parser.parseWithWarnings(data)
+
+        // Should resolve CUSIP to ticker despite CORP vs CO difference
+        #expect(trades.count == 2, "Expected 2 trades but got \(trades.count)")
+
+        let exchangeOut = trades.first { $0.type == .symbolExchangeOut }
+        #expect(exchangeOut != nil, "Expected symbolExchangeOut trade")
+        #expect(exchangeOut?.ticker == "STPK", "Expected ticker STPK but got \(exchangeOut?.ticker ?? "nil")")
+
+        #expect(warnings.isEmpty, "Expected no warnings but got: \(warnings)")
+    }
+
+    @Test("CUSIP without matching buy record generates warning")
+    func cusipWithoutMatchingBuyGeneratesWarning() throws {
+        // Only has delivered record with CUSIP, no buy to resolve against
+        let deliveredTransaction = makeTransaction(
+            date: "06/11/2021",
+            action: "Delivered - Other",
+            symbol: "42984L105",  // CUSIP
+            description: "UNKNOWN COMPANY 1:1 EXCHANGE TO SOMETHING",
+            quantity: "-2"
+        )
+        let data = makeJSONData(transactions: [deliveredTransaction])
+
+        let (trades, warnings) = try parser.parseWithWarnings(data)
+
+        // Should not create a trade
+        #expect(trades.isEmpty, "Expected no trades but got \(trades.count)")
+
+        // Should have a warning about unresolved CUSIP
+        #expect(warnings.count == 1, "Expected 1 warning but got \(warnings.count)")
+        #expect(warnings.first?.contains("42984L105") == true)
+    }
+
     // MARK: - Multiple Records Tests
 
     @Test("Multiple record types are parsed correctly")

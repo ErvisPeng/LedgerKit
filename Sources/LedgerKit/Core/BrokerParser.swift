@@ -36,6 +36,17 @@ public protocol BrokerParser: Sendable {
     /// - Returns: A tuple containing the parsed trades and any warning messages.
     /// - Throws: `ParserError` if parsing fails.
     func parseWithWarnings(_ data: Data) throws -> (trades: [ParsedTrade], warnings: [String])
+
+    /// Parses multiple files together and returns parsed trades along with any warnings.
+    ///
+    /// This method allows parsers to combine records from multiple files before processing,
+    /// which is useful for resolving cross-file dependencies (e.g., CUSIP resolution in
+    /// Charles Schwab where buy and exchange records may be in different files).
+    ///
+    /// - Parameter dataArray: An array of raw data from multiple export files.
+    /// - Returns: A tuple containing the parsed trades and any warning messages.
+    /// - Throws: `ParserError` if parsing fails.
+    func parseMultipleWithWarnings(_ dataArray: [Data]) throws -> (trades: [ParsedTrade], warnings: [String])
 }
 
 // MARK: - Default Implementation
@@ -46,5 +57,20 @@ public extension BrokerParser {
     func parse(_ data: Data) throws -> [ParsedTrade] {
         let (trades, _) = try parseWithWarnings(data)
         return trades
+    }
+
+    /// Default implementation that parses each file individually.
+    /// Override this method to combine records from multiple files before processing.
+    func parseMultipleWithWarnings(_ dataArray: [Data]) throws -> (trades: [ParsedTrade], warnings: [String]) {
+        var allTrades: [ParsedTrade] = []
+        var allWarnings: [String] = []
+
+        for data in dataArray {
+            let (trades, warnings) = try parseWithWarnings(data)
+            allTrades.append(contentsOf: trades)
+            allWarnings.append(contentsOf: warnings)
+        }
+
+        return (allTrades, allWarnings)
     }
 }

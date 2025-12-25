@@ -49,6 +49,12 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         return (trades, warnings)
     }
 
+    /// Override protocol default to combine records from multiple files.
+    /// This enables CUSIP resolution across files (e.g., buy in file1, exchange in file2).
+    public func parseMultipleWithWarnings(_ dataArray: [Data]) throws -> (trades: [ParsedTrade], warnings: [String]) {
+        return try parseMultipleFiles(dataArray)
+    }
+
     /// Parse multiple JSON files together.
     /// This method combines all records from multiple files before processing,
     /// allowing CUSIP resolution to work across files.

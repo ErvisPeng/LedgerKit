@@ -860,7 +860,7 @@ struct CharlesSchwabParserTests {
         #expect(warnings.first?.contains("42984L105") == true)
     }
 
-    @Test("CUSIP resolved via target company creates symbolExchangeIn")
+    @Test("CUSIP resolved via target company creates symbolExchangeIn when no source available")
     func cusipResolvedViaTargetCreatesExchangeIn() throws {
         // Scenario: No buy record for source company (CAPA), but have sell record for target (QSI)
         // The exchange transaction should resolve via target and create symbolExchangeIn
@@ -895,6 +895,80 @@ struct CharlesSchwabParserTests {
 
         // Should have no warnings (CUSIP was resolved via target)
         #expect(warnings.isEmpty, "Expected no warnings but got: \(warnings)")
+    }
+
+    @Test("Full SPAC exchange flow: buy source, delivered CUSIP, received target, sell target")
+    func fullSpacExchangeFlow() throws {
+        // This test matches the user's exact scenario:
+        // 1. Buy 2 CAPA
+        // 2. Delivered -2 (CUSIP) for exchange out
+        // 3. Received +2 QSI for exchange in
+        // 4. Sell 2 QSI
+        // Expected: CAPA net 0, QSI net 0
+        let buyCAPA = makeTransaction(
+            date: "02/24/2021",
+            action: "Buy",
+            symbol: "CAPA",
+            description: "HIGHCAPE CAP ACQUISITION CORP COM CL A",
+            quantity: "2",
+            price: "$15.50",
+            amount: "-$31.00"
+        )
+        let deliveredCUSIP = makeTransaction(
+            date: "06/11/2021",
+            action: "Delivered - Other",
+            symbol: "42984L105",
+            description: "HIGHCAPE CAP ACQUISITION CORP 1:1 R/S 6/1//21 74765K105 1:1 EXCHANGE TO QUANTUM-SI INC 74765K105 Auto Reorg#537627ISTOCK PAYMENT",
+            quantity: "-2"
+        )
+        let receivedQSI = makeTransaction(
+            date: "06/11/2021",
+            action: "Received - Other",
+            symbol: "QSI",
+            description: "QUANTUM-SI INC COM CL A 1:1 EXCHANGE TO QUANTUM-SI INC 74765K105 Auto Reorg#537627ISTOCK PAYMENT",
+            quantity: "2"
+        )
+        let sellQSI = makeTransaction(
+            date: "12/30/2021",
+            action: "Sell",
+            symbol: "QSI",
+            description: "TDA TRAN - Sold 2 (QSI) @7.7750",
+            quantity: "2",
+            price: "$7.775",
+            amount: "$15.55"
+        )
+        let data = makeJSONData(transactions: [buyCAPA, deliveredCUSIP, receivedQSI, sellQSI])
+
+        let (trades, warnings) = try parser.parseWithWarnings(data)
+
+        // Should have no warnings
+        #expect(warnings.isEmpty, "Expected no warnings but got: \(warnings)")
+
+        // Should have 4 trades
+        #expect(trades.count == 4, "Expected 4 trades but got \(trades.count)")
+
+        // Verify trade types
+        let buyTrade = trades.first { $0.type == .stockBuy }
+        #expect(buyTrade?.ticker == "CAPA", "Expected CAPA buy")
+        #expect(buyTrade?.quantity == 2)
+
+        let exchangeOut = trades.first { $0.type == .symbolExchangeOut }
+        #expect(exchangeOut != nil, "Expected symbolExchangeOut for CAPA")
+        #expect(exchangeOut?.ticker == "CAPA", "Expected CAPA exchange out but got \(exchangeOut?.ticker ?? "nil")")
+        #expect(exchangeOut?.quantity == 2)
+
+        let exchangeIn = trades.first { $0.type == .symbolExchangeIn }
+        #expect(exchangeIn != nil, "Expected symbolExchangeIn for QSI")
+        #expect(exchangeIn?.ticker == "QSI", "Expected QSI exchange in but got \(exchangeIn?.ticker ?? "nil")")
+        #expect(exchangeIn?.quantity == 2)
+
+        let sellTrade = trades.first { $0.type == .stockSell }
+        #expect(sellTrade?.ticker == "QSI", "Expected QSI sell")
+        #expect(sellTrade?.quantity == 2)
+
+        // Net calculation:
+        // CAPA: +2 (buy) -2 (exchange out) = 0
+        // QSI: +2 (exchange in) -2 (sell) = 0
     }
 
     // MARK: - Multiple Records Tests

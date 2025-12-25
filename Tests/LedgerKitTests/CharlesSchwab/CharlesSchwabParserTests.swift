@@ -838,9 +838,10 @@ struct CharlesSchwabParserTests {
         #expect(warnings.isEmpty, "Expected no warnings but got: \(warnings)")
     }
 
-    @Test("CUSIP without matching buy record generates warning")
-    func cusipWithoutMatchingBuyGeneratesWarning() throws {
+    @Test("CUSIP without matching buy record uses company name from description")
+    func cusipWithoutMatchingBuyUsesCompanyName() throws {
         // Only has delivered record with CUSIP, no buy to resolve against
+        // New behavior: Extract company name from description and use it as ticker
         let deliveredTransaction = makeTransaction(
             date: "06/11/2021",
             action: "Delivered - Other",
@@ -852,22 +853,20 @@ struct CharlesSchwabParserTests {
 
         let (trades, warnings) = try parser.parseWithWarnings(data)
 
-        // Should not create a trade
-        #expect(trades.isEmpty, "Expected no trades but got \(trades.count)")
+        // Should create a trade using company name as ticker
+        #expect(trades.count == 1, "Expected 1 trade but got \(trades.count)")
+        #expect(trades.first?.ticker == "UNKNOWN", "Expected company name 'UNKNOWN' as ticker")
+        #expect(trades.first?.type == .symbolExchangeOut, "Expected symbolExchangeOut")
 
-        // Should have a warning about unresolved CUSIP
-        #expect(warnings.count == 1, "Expected 1 warning but got \(warnings.count)")
-        #expect(warnings.first?.contains("42984L105") == true)
+        // Should have no warnings (resolved via company name)
+        #expect(warnings.isEmpty, "Expected no warnings but got: \(warnings)")
     }
 
-    @Test("CUSIP without source company buy record generates warning (no target fallback)")
-    func cusipWithoutSourceGeneratesWarning() throws {
+    @Test("CUSIP without source buy record resolves via company name from description")
+    func cusipWithoutSourceResolvesViaCompanyName() throws {
         // Scenario: No buy record for source company (CAPA), only have sell record for target (QSI)
-        // The CUSIP in the Delivered record represents CAPA shares being removed, NOT QSI.
-        // We should NOT fallback to target company because:
-        // 1. The Delivered record is for CAPA (source), not QSI (target)
-        // 2. Creating symbolExchangeIn for QSI would be incorrect
-        // 3. We need the CAPA buy record to properly resolve the CUSIP
+        // New behavior: Extract company name from description and use it as ticker
+        // This ensures trades are tracked even without the original buy record
         let sellQSITransaction = makeTransaction(
             date: "12/30/2021",
             action: "Sell",
@@ -888,13 +887,20 @@ struct CharlesSchwabParserTests {
 
         let (trades, warnings) = try parser.parseWithWarnings(data)
 
-        // Should only have 1 trade (the sell), not the exchange
-        #expect(trades.count == 1, "Expected 1 trade but got \(trades.count)")
-        #expect(trades.first?.type == .stockSell, "Expected stockSell trade")
+        // Should have 2 trades (sell + exchange using company name)
+        #expect(trades.count == 2, "Expected 2 trades but got \(trades.count)")
 
-        // Should have a warning about unresolved CUSIP
-        #expect(warnings.count == 1, "Expected 1 warning but got \(warnings.count)")
-        #expect(warnings.first?.contains("42984L105") == true, "Warning should mention the CUSIP")
+        // Exchange should use company name as ticker
+        let exchangeOut = trades.first { $0.type == .symbolExchangeOut }
+        #expect(exchangeOut != nil, "Expected symbolExchangeOut trade")
+        #expect(exchangeOut?.ticker == "HIGHCAPE CAP ACQUISITION", "Expected company name as ticker")
+
+        // Sell should be for QSI
+        let sellTrade = trades.first { $0.type == .stockSell }
+        #expect(sellTrade?.ticker == "QSI", "Expected QSI sell")
+
+        // Should have no warnings (resolved via company name)
+        #expect(warnings.isEmpty, "Expected no warnings but got: \(warnings)")
     }
 
     @Test("Full SPAC exchange flow: buy source, delivered CUSIP, received target, sell target")
@@ -1038,6 +1044,47 @@ struct CharlesSchwabParserTests {
         let exchangeIn = trades.first { $0.type == .symbolExchangeIn }
         #expect(exchangeIn?.ticker == "QSI")
         #expect(exchangeIn?.quantity == 2)
+    }
+
+    @Test("CUSIP-only records (Buy and Delivered both use CUSIP) resolve to company name")
+    func cusipOnlyRecordsResolveToCompanyName() throws {
+        // Scenario: Both Buy and Delivered records use CUSIP instead of ticker
+        // This happens during corporate actions like THOMA BRAVO ADVANTAGE
+        let buyCUSIP = makeTransaction(
+            date: "06/14/2021",
+            action: "Buy",
+            symbol: "G88272102",  // CUSIP, not ticker!
+            description: "THOMA BRAVO ADVANTAGE 1:1 EXC 6/29/21 M5R75Y101",
+            quantity: "2",
+            price: "$10.35",
+            amount: "-$20.70"
+        )
+        let deliveredCUSIP = makeTransaction(
+            date: "06/29/2021",
+            action: "Delivered - Other",
+            symbol: "G88272102",  // Same CUSIP
+            description: "THOMA BRAVO ADVANTAGE 1:1 EXC 6/29/21 M5R75Y101 1:1 EXCHANGE TO IRONSOURCE LTD M5R75Y101 Auto Reorg#539980ISTOCK PAYMENT",
+            quantity: "-2"
+        )
+        let data = makeJSONData(transactions: [buyCUSIP, deliveredCUSIP])
+
+        let (trades, warnings) = try parser.parseWithWarnings(data)
+
+        // Should have no warnings (CUSIP resolved via company name)
+        #expect(warnings.isEmpty, "Expected no warnings but got: \(warnings)")
+
+        // Should have 2 trades
+        #expect(trades.count == 2, "Expected 2 trades but got \(trades.count)")
+
+        // Both should use company name as ticker since no real ticker is available
+        let buyTrade = trades.first { $0.type == .stockBuy }
+        #expect(buyTrade != nil, "Expected stockBuy trade")
+        #expect(buyTrade?.ticker == "THOMA BRAVO ADVANTAGE", "Expected company name as ticker")
+
+        let exchangeOut = trades.first { $0.type == .symbolExchangeOut }
+        #expect(exchangeOut != nil, "Expected symbolExchangeOut trade")
+        #expect(exchangeOut?.ticker == "THOMA BRAVO ADVANTAGE", "Expected company name as ticker")
+        #expect(exchangeOut?.quantity == 2)
     }
 
     // MARK: - Multiple Records Tests

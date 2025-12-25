@@ -302,24 +302,46 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
 
     /// Build company name to ticker mapping.
     /// Extracts company names from records with valid tickers.
+    /// Also builds CUSIP to company name mapping for records where symbol is CUSIP.
     private func buildCompanyTickerMap(
         from records: [CharlesSchwabRawTransaction]
     ) -> [String: String] {
         var map: [String: String] = [:]
 
+        // First pass: Build company name → ticker mapping from records with valid tickers
         for record in records {
             let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
 
-            // Skip empty or CUSIP symbols
-            guard !symbol.isEmpty, !isCUSIP(symbol) else {
-                continue
-            }
+            // Skip empty symbols
+            guard !symbol.isEmpty else { continue }
 
-            // Extract company name (first few words until specific keywords)
+            // If symbol is a valid ticker (not CUSIP), map company name → ticker
+            if !isCUSIP(symbol) {
+                if let companyName = extractCompanyName(from: record.description) {
+                    if map[companyName] == nil {
+                        map[companyName] = symbol.uppercased()
+                    }
+                }
+            }
+        }
+
+        // Second pass: For records with CUSIP as symbol, map CUSIP → company name
+        // This handles cases where even Buy records use CUSIP (e.g., THOMA BRAVO)
+        for record in records {
+            let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
+
+            guard !symbol.isEmpty, isCUSIP(symbol) else { continue }
+
+            // Extract company name from description
             if let companyName = extractCompanyName(from: record.description) {
-                // Keep first found ticker (usually buy records)
+                // Map CUSIP → company name (use company name as pseudo-ticker)
+                // Only if we don't already have a real ticker for this company
                 if map[companyName] == nil {
-                    map[companyName] = symbol.uppercased()
+                    map[companyName] = companyName  // Use company name as identifier
+                }
+                // Also map CUSIP directly to company name for lookup
+                if map[symbol.uppercased()] == nil {
+                    map[symbol.uppercased()] = companyName
                 }
             }
         }
@@ -365,8 +387,9 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         }
 
         // Also try to find CUSIP pattern (e.g., "74765K105") and truncate before it
-        // CUSIP format: 5 digits + letter + 3 digits, or letter + digits pattern
-        let cusipPattern = #"\s+[0-9A-Z]{5,9}\s*(1:1|AUTO|REORG|EXCHANGE)"#
+        // CUSIP format: 5-9 alphanumerics containing at least one digit
+        // Use lookahead (?=...) to require at least one digit, avoiding false matches like "ADVANTAGE"
+        let cusipPattern = #"\s+(?=[0-9A-Z]*[0-9])[0-9A-Z]{5,9}\s*(1:1|AUTO|REORG|EXCHANGE)"#
         if let regex = try? NSRegularExpression(pattern: cusipPattern, options: []),
            let match = regex.firstMatch(in: desc, range: NSRange(desc.startIndex..., in: desc)),
            let range = Range(match.range, in: desc),
@@ -616,18 +639,25 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             var symbol = record.symbol.trimmingCharacters(in: .whitespaces)
             guard !symbol.isEmpty else { return (nil, nil) }
 
-            // If symbol is CUSIP, try to look up ticker from source company name
+            // If symbol is CUSIP, try to resolve to ticker or company name
             if isCUSIP(symbol) {
-                // Look up by source company name (the company being exchanged OUT)
+                var resolved = false
+
+                // Try 1: Look up by source company name (the company being exchanged OUT)
                 if let companyName = extractCompanyName(from: record.description),
                    let ticker = companyTickerMap[companyName] {
                     symbol = ticker
-                } else {
-                    // Cannot resolve CUSIP to ticker - return warning
-                    // Note: We do NOT fallback to target company because:
-                    // - The CUSIP represents the SOURCE company shares being delivered/removed
-                    // - Using the target company ticker would create an incorrect record
-                    // - The user needs to import the source ticker's buy record first
+                    resolved = true
+                }
+
+                // Try 2: Look up CUSIP directly (for cases where Buy also uses CUSIP)
+                if !resolved, let companyName = companyTickerMap[symbol.uppercased()] {
+                    symbol = companyName
+                    resolved = true
+                }
+
+                if !resolved {
+                    // Cannot resolve CUSIP - return warning
                     let warning = "無法解析 CUSIP '\(symbol)': \(record.action) - \(record.description) (數量: \(record.quantity))"
                     return (nil, warning)
                 }
@@ -824,13 +854,25 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         var symbol = record.symbol.trimmingCharacters(in: .whitespaces)
         guard !symbol.isEmpty else { return (nil, nil) }
 
-        // If symbol is CUSIP, try to look up ticker from map
+        // If symbol is CUSIP, try to resolve to ticker or company name
         if isCUSIP(symbol) {
+            var resolved = false
+
+            // Try 1: Look up by company name from description
             if let companyName = extractCompanyName(from: record.description),
                let ticker = companyTickerMap[companyName] {
                 symbol = ticker
-            } else {
-                // Cannot resolve CUSIP to ticker - return warning
+                resolved = true
+            }
+
+            // Try 2: Look up CUSIP directly (for cases where Buy also uses CUSIP)
+            if !resolved, let companyName = companyTickerMap[symbol.uppercased()] {
+                symbol = companyName
+                resolved = true
+            }
+
+            if !resolved {
+                // Cannot resolve CUSIP - return warning
                 let warning = "無法解析 CUSIP '\(symbol)': \(record.action) - \(record.description) (數量: \(record.quantity))"
                 return (nil, warning)
             }

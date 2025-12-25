@@ -353,7 +353,40 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         companyName = companyName.trimmingCharacters(in: .whitespaces)
         guard companyName.count >= 3 else { return nil }
 
-        return companyName
+        // Normalize company name for better matching
+        // "STAR PEAK ENERGY TRANSITION CORP" and "STAR PEAK ENERGY TRANSITION CO" should match
+        return normalizeCompanyName(companyName)
+    }
+
+    /// Normalize company name for consistent matching.
+    /// Removes trailing suffixes like "CORP", "CO", "INC", "LLC", "LTD" for comparison.
+    private func normalizeCompanyName(_ name: String) -> String {
+        var normalized = name
+
+        // Remove trailing corporate suffixes for matching
+        // Order matters: check longer suffixes first
+        let trailingSuffixes = [
+            " CORPORATION",
+            " CORP",
+            " COMPANY",
+            " CO",
+            " INCORPORATED",
+            " INC",
+            " LIMITED",
+            " LTD",
+            " LLC",
+            " LP",
+            " PLC"
+        ]
+
+        for suffix in trailingSuffixes {
+            if normalized.hasSuffix(suffix) {
+                normalized = String(normalized.dropLast(suffix.count))
+                break  // Only remove one suffix
+            }
+        }
+
+        return normalized.trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - Trade Parsing

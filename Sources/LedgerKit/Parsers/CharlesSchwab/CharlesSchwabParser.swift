@@ -301,17 +301,26 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
 
     /// Extract company name from description.
     /// Example: "CHURCHILL CAPITAL CORP IV COM CL A" -> "CHURCHILL CAPITAL CORP IV"
+    /// Example: "HIGHCAPE CAP ACQUISITION CORP 1:1 R/S..." -> "HIGHCAPE CAP ACQUISITION CORP"
     private func extractCompanyName(from description: String) -> String? {
         let desc = description.uppercased()
 
         // Common suffixes to truncate at
+        // Note: Do NOT include " CORP ", " INC ", " LTD ", " LLC " as they are part of company names
         let suffixes = [
+            // Stock class identifiers (most specific first)
             " COM CL A", " COM CL B", " COM CL C",
-            " COM CLASS A", " COM CLASS B",
-            " COMMON", " COM ", " CL A", " CL B",
-            " 1:1 EXC", " 1:1 EXCHANGE",
-            " INC ", " CORP ", " LTD ", " LLC ",
-            " AUTO REORG"
+            " COM CLASS A", " COM CLASS B", " COM CLASS C",
+            " COMMON STOCK", " COMMON CL", " COMMON",
+            " CL A ", " CL B ", " CL C ",
+            // Corporate action identifiers
+            " 1:1 R/S", " 1:1 EXC", " 1:1 EXCHANGE",
+            " AUTO REORG", " REORG#",
+            // Security type suffixes
+            " SPONSORED ADS", " ADR ", " ADS ",
+            " UNITS ", " WARRANTS ", " WARRANT ",
+            // CUSIP patterns (9 alphanumeric after company name)
+            " \\d{5}[A-Z]\\d{3}"  // Not regex, but pattern hint
         ]
 
         var companyName = desc
@@ -324,6 +333,16 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                     earliestIndex = range.lowerBound
                 }
             }
+        }
+
+        // Also try to find CUSIP pattern (e.g., "74765K105") and truncate before it
+        // CUSIP format: 5 digits + letter + 3 digits, or letter + digits pattern
+        let cusipPattern = #"\s+[0-9A-Z]{5,9}\s*(1:1|AUTO|REORG|EXCHANGE)"#
+        if let regex = try? NSRegularExpression(pattern: cusipPattern, options: []),
+           let match = regex.firstMatch(in: desc, range: NSRange(desc.startIndex..., in: desc)),
+           let range = Range(match.range, in: desc),
+           range.lowerBound < earliestIndex {
+            earliestIndex = range.lowerBound
         }
 
         if earliestIndex < desc.endIndex {

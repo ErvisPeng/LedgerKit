@@ -313,6 +313,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             " COM CLASS A", " COM CLASS B", " COM CLASS C",
             " COMMON STOCK", " COMMON CL", " COMMON",
             " CL A ", " CL B ", " CL C ",
+            " COM",  // Common stock (must be after more specific COM patterns)
             // Corporate action identifiers
             " 1:1 R/S", " 1:1 EXC", " 1:1 EXCHANGE",
             " AUTO REORG", " REORG#",
@@ -627,6 +628,10 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             var symbol = record.symbol.trimmingCharacters(in: .whitespaces)
             guard !symbol.isEmpty else { return (nil, nil) }
 
+            // Track whether CUSIP was resolved via source or target company
+            // This affects the trade type: target company resolution means we received new shares
+            var resolvedViaTargetCompany = false
+
             // If symbol is CUSIP, try to look up ticker from map
             if isCUSIP(symbol) {
                 var resolved = false
@@ -636,6 +641,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                    let ticker = companyTickerMap[companyName] {
                     symbol = ticker
                     resolved = true
+                    resolvedViaTargetCompany = false
                 }
 
                 // Try 2: If not found, try to extract target company from "EXCHANGE TO XXX"
@@ -644,6 +650,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                        let ticker = companyTickerMap[targetCompany] {
                         symbol = ticker
                         resolved = true
+                        resolvedViaTargetCompany = true
                     }
                 }
 
@@ -654,7 +661,16 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 }
             }
 
-            let tradeType: ParsedTradeType = quantity < .zero ? .symbolExchangeOut : .symbolExchangeIn
+            // Determine trade type:
+            // - If resolved via TARGET company: always symbolExchangeIn (received new shares)
+            // - If resolved via SOURCE company: use quantity sign to determine direction
+            let tradeType: ParsedTradeType
+            if resolvedViaTargetCompany {
+                // Resolved via "EXCHANGE TO XXX" - this represents receiving new shares
+                tradeType = .symbolExchangeIn
+            } else {
+                tradeType = quantity < .zero ? .symbolExchangeOut : .symbolExchangeIn
+            }
 
             return (ParsedTrade(
                 type: tradeType,

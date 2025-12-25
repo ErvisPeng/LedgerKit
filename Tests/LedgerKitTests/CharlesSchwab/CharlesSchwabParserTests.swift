@@ -860,6 +860,43 @@ struct CharlesSchwabParserTests {
         #expect(warnings.first?.contains("42984L105") == true)
     }
 
+    @Test("CUSIP resolved via target company creates symbolExchangeIn")
+    func cusipResolvedViaTargetCreatesExchangeIn() throws {
+        // Scenario: No buy record for source company (CAPA), but have sell record for target (QSI)
+        // The exchange transaction should resolve via target and create symbolExchangeIn
+        let sellQSITransaction = makeTransaction(
+            date: "12/30/2021",
+            action: "Sell",
+            symbol: "QSI",
+            description: "QUANTUM-SI INC COM",
+            quantity: "-2",
+            price: "$5.00",
+            amount: "$10.00"
+        )
+        let deliveredTransaction = makeTransaction(
+            date: "06/11/2021",
+            action: "Delivered - Other",
+            symbol: "42984L105",  // CUSIP - no CAPA buy record to resolve against
+            description: "HIGHCAPE CAP ACQUISITION CORP 1:1 R/S 6/1//21 74765K105 1:1 EXCHANGE TO QUANTUM-SI INC 74765K105 Auto Reorg#537627ISTOCK PAYMENT",
+            quantity: "-2"
+        )
+        let data = makeJSONData(transactions: [sellQSITransaction, deliveredTransaction])
+
+        let (trades, warnings) = try parser.parseWithWarnings(data)
+
+        // Should have 2 trades: sell + exchange in
+        #expect(trades.count == 2, "Expected 2 trades but got \(trades.count)")
+
+        // The exchange should be symbolExchangeIn (not Out!) because we resolved via target company
+        let exchangeIn = trades.first { $0.type == .symbolExchangeIn }
+        #expect(exchangeIn != nil, "Expected symbolExchangeIn trade")
+        #expect(exchangeIn?.ticker == "QSI", "Expected ticker QSI but got \(exchangeIn?.ticker ?? "nil")")
+        #expect(exchangeIn?.quantity == 2, "Expected quantity 2 but got \(exchangeIn?.quantity ?? 0)")
+
+        // Should have no warnings (CUSIP was resolved via target)
+        #expect(warnings.isEmpty, "Expected no warnings but got: \(warnings)")
+    }
+
     // MARK: - Multiple Records Tests
 
     @Test("Multiple record types are parsed correctly")

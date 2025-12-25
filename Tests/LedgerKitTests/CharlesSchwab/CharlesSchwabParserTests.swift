@@ -860,10 +860,14 @@ struct CharlesSchwabParserTests {
         #expect(warnings.first?.contains("42984L105") == true)
     }
 
-    @Test("CUSIP resolved via target company creates symbolExchangeIn when no source available")
-    func cusipResolvedViaTargetCreatesExchangeIn() throws {
-        // Scenario: No buy record for source company (CAPA), but have sell record for target (QSI)
-        // The exchange transaction should resolve via target and create symbolExchangeIn
+    @Test("CUSIP without source company buy record generates warning (no target fallback)")
+    func cusipWithoutSourceGeneratesWarning() throws {
+        // Scenario: No buy record for source company (CAPA), only have sell record for target (QSI)
+        // The CUSIP in the Delivered record represents CAPA shares being removed, NOT QSI.
+        // We should NOT fallback to target company because:
+        // 1. The Delivered record is for CAPA (source), not QSI (target)
+        // 2. Creating symbolExchangeIn for QSI would be incorrect
+        // 3. We need the CAPA buy record to properly resolve the CUSIP
         let sellQSITransaction = makeTransaction(
             date: "12/30/2021",
             action: "Sell",
@@ -884,17 +888,13 @@ struct CharlesSchwabParserTests {
 
         let (trades, warnings) = try parser.parseWithWarnings(data)
 
-        // Should have 2 trades: sell + exchange in
-        #expect(trades.count == 2, "Expected 2 trades but got \(trades.count)")
+        // Should only have 1 trade (the sell), not the exchange
+        #expect(trades.count == 1, "Expected 1 trade but got \(trades.count)")
+        #expect(trades.first?.type == .stockSell, "Expected stockSell trade")
 
-        // The exchange should be symbolExchangeIn (not Out!) because we resolved via target company
-        let exchangeIn = trades.first { $0.type == .symbolExchangeIn }
-        #expect(exchangeIn != nil, "Expected symbolExchangeIn trade")
-        #expect(exchangeIn?.ticker == "QSI", "Expected ticker QSI but got \(exchangeIn?.ticker ?? "nil")")
-        #expect(exchangeIn?.quantity == 2, "Expected quantity 2 but got \(exchangeIn?.quantity ?? 0)")
-
-        // Should have no warnings (CUSIP was resolved via target)
-        #expect(warnings.isEmpty, "Expected no warnings but got: \(warnings)")
+        // Should have a warning about unresolved CUSIP
+        #expect(warnings.count == 1, "Expected 1 warning but got \(warnings.count)")
+        #expect(warnings.first?.contains("42984L105") == true, "Warning should mention the CUSIP")
     }
 
     @Test("Full SPAC exchange flow: buy source, delivered CUSIP, received target, sell target")

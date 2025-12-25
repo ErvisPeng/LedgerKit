@@ -49,6 +49,28 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         return (trades, warnings)
     }
 
+    /// Parse multiple JSON files together.
+    /// This method combines all records from multiple files before processing,
+    /// allowing CUSIP resolution to work across files.
+    ///
+    /// Use this when importing multiple Charles Schwab JSON files that contain
+    /// related transactions (e.g., buy in one file, exchange in another).
+    ///
+    /// - Parameter dataArray: Array of JSON file data
+    /// - Returns: Tuple of parsed trades and warning messages
+    public func parseMultipleFiles(_ dataArray: [Data]) throws -> (trades: [ParsedTrade], warnings: [String]) {
+        // Parse all files and combine records
+        var allRecords: [CharlesSchwabRawTransaction] = []
+        for data in dataArray {
+            let records = try parseJSON(data)
+            allRecords.append(contentsOf: records)
+        }
+
+        // Process all records together (builds unified company ticker map)
+        let (trades, warnings) = extractTrades(from: allRecords)
+        return (trades, warnings)
+    }
+
     // MARK: - Public Methods
 
     /// Parse JSON data into raw records.

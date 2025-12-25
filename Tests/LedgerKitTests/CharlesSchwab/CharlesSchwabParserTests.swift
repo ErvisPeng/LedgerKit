@@ -971,6 +971,75 @@ struct CharlesSchwabParserTests {
         // QSI: +2 (exchange in) -2 (sell) = 0
     }
 
+    @Test("parseMultipleFiles combines records from separate files for CUSIP resolution")
+    func parseMultipleFilesCombinesRecords() throws {
+        // Scenario: Records are split across 3 separate files (user's actual workflow)
+        // File 1: Buy CAPA
+        // File 2: Exchange CAPA -> QSI (CUSIP)
+        // File 3: Sell QSI
+        // When parsed together, CUSIP should resolve correctly
+
+        let file1Data = makeJSONData(transactions: [
+            makeTransaction(
+                date: "02/24/2021",
+                action: "Buy",
+                symbol: "CAPA",
+                description: "HIGHCAPE CAP ACQUISITION CORP COM CL A",
+                quantity: "2",
+                price: "$15.50",
+                amount: "-$31.00"
+            )
+        ])
+
+        let file2Data = makeJSONData(transactions: [
+            makeTransaction(
+                date: "06/11/2021",
+                action: "Delivered - Other",
+                symbol: "42984L105",  // CUSIP - needs CAPA from file1 to resolve
+                description: "HIGHCAPE CAP ACQUISITION CORP 1:1 R/S 6/1//21 74765K105 1:1 EXCHANGE TO QUANTUM-SI INC 74765K105 Auto Reorg#537627ISTOCK PAYMENT",
+                quantity: "-2"
+            ),
+            makeTransaction(
+                date: "06/11/2021",
+                action: "Received - Other",
+                symbol: "QSI",
+                description: "QUANTUM-SI INC COM CL A",
+                quantity: "2"
+            )
+        ])
+
+        let file3Data = makeJSONData(transactions: [
+            makeTransaction(
+                date: "12/30/2021",
+                action: "Sell",
+                symbol: "QSI",
+                description: "QUANTUM-SI INC COM",
+                quantity: "-2",
+                price: "$7.775",
+                amount: "$15.55"
+            )
+        ])
+
+        // Parse all files together
+        let (trades, warnings) = try parser.parseMultipleFiles([file1Data, file2Data, file3Data])
+
+        // Should have no warnings (CUSIP resolved via combined records)
+        #expect(warnings.isEmpty, "Expected no warnings but got: \(warnings)")
+
+        // Should have 4 trades
+        #expect(trades.count == 4, "Expected 4 trades but got \(trades.count)")
+
+        // Verify exchange out is for CAPA (resolved from file1)
+        let exchangeOut = trades.first { $0.type == .symbolExchangeOut }
+        #expect(exchangeOut?.ticker == "CAPA", "CUSIP should resolve to CAPA")
+        #expect(exchangeOut?.quantity == 2)
+
+        // Verify exchange in is for QSI
+        let exchangeIn = trades.first { $0.type == .symbolExchangeIn }
+        #expect(exchangeIn?.ticker == "QSI")
+        #expect(exchangeIn?.quantity == 2)
+    }
+
     // MARK: - Multiple Records Tests
 
     @Test("Multiple record types are parsed correctly")

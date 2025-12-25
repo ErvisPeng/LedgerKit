@@ -389,6 +389,46 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         return normalized.trimmingCharacters(in: .whitespaces)
     }
 
+    /// Extract target company name from "EXCHANGE TO XXX" pattern in description.
+    /// Example: "...1:1 EXCHANGE TO STEM INC 85859N102..." -> "STEM"
+    /// Example: "...1:1 EXCHANGE TO QUANTUM-SI INC 74765K105..." -> "QUANTUM-SI"
+    private func extractExchangeTargetCompany(from description: String) -> String? {
+        let desc = description.uppercased()
+
+        // Look for "EXCHANGE TO XXX" pattern
+        guard let exchangeRange = desc.range(of: "EXCHANGE TO ") else {
+            return nil
+        }
+
+        // Extract text after "EXCHANGE TO "
+        let afterExchange = String(desc[exchangeRange.upperBound...])
+
+        // Find the company name - it ends at CUSIP pattern or other markers
+        let endMarkers = [" AUTO", " REORG", " STOCK"]
+        var companyPart = afterExchange
+
+        // Find CUSIP pattern (e.g., "85859N102") and truncate before it
+        let cusipPattern = #"\s+[0-9A-Z]{5,9}\s"#
+        if let regex = try? NSRegularExpression(pattern: cusipPattern, options: []),
+           let match = regex.firstMatch(in: companyPart, range: NSRange(companyPart.startIndex..., in: companyPart)),
+           let range = Range(match.range, in: companyPart) {
+            companyPart = String(companyPart[..<range.lowerBound])
+        }
+
+        // Also check for end markers
+        for marker in endMarkers {
+            if let markerRange = companyPart.range(of: marker) {
+                companyPart = String(companyPart[..<markerRange.lowerBound])
+            }
+        }
+
+        companyPart = companyPart.trimmingCharacters(in: .whitespaces)
+        guard companyPart.count >= 2 else { return nil }
+
+        // Normalize the company name
+        return normalizeCompanyName(companyPart)
+    }
+
     // MARK: - Trade Parsing
 
     /// Parse trade from raw record.
@@ -589,10 +629,25 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
 
             // If symbol is CUSIP, try to look up ticker from map
             if isCUSIP(symbol) {
+                var resolved = false
+
+                // Try 1: Look up by source company name
                 if let companyName = extractCompanyName(from: record.description),
                    let ticker = companyTickerMap[companyName] {
                     symbol = ticker
-                } else {
+                    resolved = true
+                }
+
+                // Try 2: If not found, try to extract target company from "EXCHANGE TO XXX"
+                if !resolved {
+                    if let targetCompany = extractExchangeTargetCompany(from: record.description),
+                       let ticker = companyTickerMap[targetCompany] {
+                        symbol = ticker
+                        resolved = true
+                    }
+                }
+
+                if !resolved {
                     // Cannot resolve CUSIP to ticker - return warning
                     let warning = "無法解析 CUSIP '\(symbol)': \(record.action) - \(record.description) (數量: \(record.quantity))"
                     return (nil, warning)

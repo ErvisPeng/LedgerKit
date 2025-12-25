@@ -1,0 +1,12 @@
+{
+  "/Users/ervispeng/Documents/Codex/LedgerKit/Sources/LedgerKit/Core/BrokerParser.swift" : {
+    "abi-baseline-json" : "/Users/ervispeng/Documents/Codex/LedgerKit/build/LedgerKit.build/Release-iphonesimulator/LedgerKit.build/Objects-normal/arm64/LedgerKit.abi.json",
+    "const-values" : "/Users/ervispeng/Documents/Codex/LedgerKit/build/LedgerKit.build/Release-iphonesimulator/LedgerKit.build/Objects-normal/arm64/LedgerKit-primary.swiftconstvalues",
+    "dependencies" : "/Users/ervispeng/Documents/Codex/LedgerKit/build/LedgerKit.build/Release-iphonesimulator/LedgerKit.build/Objects-normal/arm64/LedgerKit-primary.d",
+    "diagnostics" : "/Users/ervispeng/Documents/Codex/LedgerKit/build/LedgerKit.build/Release-iphonesimulator/LedgerKit.build/Objects-normal/arm64/LedgerKit-primary.dia",
+    "objc-header" : "/Users/ervispeng/Documents/Codex/LedgerKit/build/LedgerKit.build/Release-iphonesimulator/LedgerKit.build/Objects-normal/arm64/LedgerKit-Swift.h",
+    "swiftdoc" : "/Users/ervispeng/Documents/Codex/LedgerKit/build/LedgerKit.build/Release-iphonesimulator/LedgerKit.build/Objects-normal/arm64/LedgerKit.swiftdoc",
+    "swiftmodule" : "/Users/ervispeng/Documents/Codex/LedgerKit/build/LedgerKit.build/Release-iphonesimulator/LedgerKit.build/Objects-normal/arm64/LedgerKit.swiftmodule",
+    "swiftsourceinfo" : "/Users/ervispeng/Documents/Codex/LedgerKit/build/LedgerKit.build/Release-iphonesimulator/LedgerKit.build/Objects-normal/arm64/LedgerKit.swiftsourceinfo"
+  }
+}

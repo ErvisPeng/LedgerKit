@@ -106,22 +106,64 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         // Build company name to ticker mapping for CUSIP resolution
         let companyTickerMap = buildCompanyTickerMap(from: records)
 
-        // Step 1: Build tax lookup map for precise dividend-tax pairing
+        // Step 1: Build tax lookup maps for precise dividend-tax pairing
         // Key: (Date, Symbol, ItemIssueId) → Tax record
         let taxRecords = buildTaxLookup(from: records)
+        let w8TaxRecords = buildW8TaxLookup(from: records)
 
         // Step 2: Track which tax records have been paired
         var pairedTaxIndices: Set<Int> = []
 
-        // Step 3: Process all records
+        // Step 3: First pass - Process Qual Div Reinvest to pair with taxes
+        // This must be done first to mark all paired tax indices before processing W-8 records
+        print("[CASH_DEBUG] 🔄 First pass: Processing Qual Div Reinvest for tax pairing...")
+        for (index, record) in records.enumerated() {
+            // Parse action type
+            guard let actionType = CharlesSchwabActionType(rawAction: record.action) else {
+                continue
+            }
+
+            // Only process Qual Div Reinvest in first pass
+            if actionType == .qualDivReinvest || actionType == .reinvestDividend {
+                let (trade, _) = parseTrade(
+                    from: record,
+                    companyTickerMap: companyTickerMap,
+                    taxRecords: taxRecords,
+                    w8TaxRecords: w8TaxRecords,
+                    pairedTaxIndices: &pairedTaxIndices
+                )
+                if let trade = trade {
+                    trades.append(trade)
+                }
+            }
+        }
+
+        print("[CASH_DEBUG] 🔄 Second pass: Processing all other records...")
+        // Step 4: Second pass - Process all other records (skipping Qual Div Reinvest and paired taxes)
         for (index, record) in records.enumerated() {
             // Skip NRA Tax Adj - will be paired with dividends
             if record.action == "NRA Tax Adj" {
                 continue
             }
 
+            // Skip W-8 WITHHOLDING if already paired with Qual Div Reinvest
+            if record.action == "Journaled Shares" &&
+               record.description.uppercased().contains("W-8 WITHHOLDING") {
+                if pairedTaxIndices.contains(index) {
+                    print("[CASH_DEBUG] ⏭️ Skipping paired W-8 tax: \(record.date) | \(record.amount)")
+                    continue
+                } else {
+                    print("[CASH_DEBUG] ⚠️ W-8 tax NOT paired, will process: \(record.date) | \(record.amount)")
+                }
+            }
+
             // Parse action type
             guard let actionType = CharlesSchwabActionType(rawAction: record.action) else {
+                continue
+            }
+
+            // Skip Qual Div Reinvest (already processed in first pass)
+            if actionType == .qualDivReinvest || actionType == .reinvestDividend {
                 continue
             }
 
@@ -138,7 +180,13 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             }
 
             // All other record types - normal processing
-            let (trade, warning) = parseTrade(from: record, companyTickerMap: companyTickerMap)
+            let (trade, warning) = parseTrade(
+                from: record,
+                companyTickerMap: companyTickerMap,
+                taxRecords: taxRecords,
+                w8TaxRecords: w8TaxRecords,
+                pairedTaxIndices: &pairedTaxIndices
+            )
             if let trade = trade {
                 trades.append(trade)
             }
@@ -155,6 +203,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             }
 
             // This NRA Tax Adj was not paired with a dividend - record as standalone
+            print("[CASH_DEBUG] ⚠️ Unpaired NRA Tax: \(record.date) | \(record.symbol) | \(record.amount)")
             guard let parsedDate = parseDate(record.date) else { continue }
             let amount = parseAmount(record.amount)
             guard abs(amount) > 0 else { continue }
@@ -172,6 +221,15 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             )
             trades.append(trade)
         }
+
+        // Debug: Print parsing summary
+        print("[CASH_DEBUG] ═══════════════════════════════════════════")
+        print("[CASH_DEBUG] 📊 Parsing Summary:")
+        print("[CASH_DEBUG] Total records: \(records.count)")
+        print("[CASH_DEBUG] Parsed trades: \(trades.count)")
+        print("[CASH_DEBUG] Paired W-8 taxes: \(pairedTaxIndices.count)")
+        print("[CASH_DEBUG] Warnings: \(warnings.count)")
+        print("[CASH_DEBUG] ═══════════════════════════════════════════")
 
         // Sort by trade date (oldest first), buys before sells on same day
         let sortedTrades = trades.sorted { trade1, trade2 in
@@ -210,6 +268,36 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 itemIssueId: record.itemIssueId
             )
             map[key] = (index, record)
+        }
+
+        return map
+    }
+
+    /// Build lookup map for W-8 WITHHOLDING tax records (in Journaled Shares).
+    /// These are paired with Qual Div Reinvest records that have empty symbol.
+    /// Key: (Date, Symbol extracted from description) → List of tax records
+    /// Note: Same day/symbol can have multiple tax records, so we use array
+    private func buildW8TaxLookup(
+        from records: [CharlesSchwabRawTransaction]
+    ) -> [String: [(index: Int, record: CharlesSchwabRawTransaction)]] {
+        var map: [String: [(index: Int, record: CharlesSchwabRawTransaction)]] = [:]
+
+        for (index, record) in records.enumerated() {
+            guard record.action == "Journaled Shares",
+                  record.description.uppercased().contains("W-8 WITHHOLDING") else {
+                continue
+            }
+
+            let symbol = extractSymbolFromDescription(record.description)
+            guard !symbol.isEmpty else { continue }
+
+            // Use simple key: "Date|Symbol"
+            let key = "\(record.date)|\(symbol.uppercased())"
+
+            if map[key] == nil {
+                map[key] = []
+            }
+            map[key]?.append((index, record))
         }
 
         return map
@@ -441,13 +529,28 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         return normalized.trimmingCharacters(in: .whitespaces)
     }
 
+    /// Extract symbol from description text (e.g., "(NVDA)" → "NVDA").
+    /// Used for records where symbol field is empty but description contains it in parentheses.
+    private func extractSymbolFromDescription(_ description: String) -> String {
+        if let openParen = description.range(of: "("),
+           let closeParen = description.range(of: ")") {
+            return String(description[openParen.upperBound..<closeParen.lowerBound])
+                .trimmingCharacters(in: .whitespaces)
+                .uppercased()
+        }
+        return ""
+    }
+
     // MARK: - Trade Parsing
 
     /// Parse trade from raw record.
     /// - Returns: Tuple of (ParsedTrade?, warning message?)
     private func parseTrade(
         from record: CharlesSchwabRawTransaction,
-        companyTickerMap: [String: String] = [:]
+        companyTickerMap: [String: String] = [:],
+        taxRecords: [DividendTaxKey: (index: Int, record: CharlesSchwabRawTransaction)] = [:],
+        w8TaxRecords: [String: [(index: Int, record: CharlesSchwabRawTransaction)]] = [:],
+        pairedTaxIndices: inout Set<Int>
     ) -> (ParsedTrade?, String?) {
         // Handle ADR Mgmt Fee
         if record.action == "ADR Mgmt Fee" {
@@ -830,21 +933,123 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         // Note: CS has two separate records for dividend reinvestment:
         // 1. "Qual Div Reinvest" / "Reinvest Dividend" - dividend income (often empty symbol/quantity)
         // 2. "Reinvest Shares" - actual stock purchase (has symbol, quantity, price)
-        // We skip #1 if symbol is empty, and let #2 be handled as stockBuy
+        //
+        // Updated logic:
+        // - If symbol is NOT empty: treat as dividendReinvest (stock purchase)
+        // - If symbol IS empty: extract symbol from description, pair with W-8 tax, treat as dividend income
         if actionType == .qualDivReinvest || actionType == .reinvestDividend {
             let symbol = record.symbol.trimmingCharacters(in: .whitespaces)
 
-            // Skip if symbol is empty or quantity is zero (will be handled by "Reinvest Shares")
-            guard !symbol.isEmpty, abs(quantity) > 0 else { return (nil, nil) }
+            // Case 1: Has symbol and quantity → This is the "stock purchase" part
+            if !symbol.isEmpty && abs(quantity) > 0 {
+                return (ParsedTrade(
+                    type: .dividendReinvest,
+                    ticker: symbol.uppercased(),
+                    quantity: abs(quantity),
+                    price: price,
+                    totalAmount: amount,  // Keep original sign
+                    tradeDate: parsedDate,
+                    optionInfo: nil,
+                    note: "\(record.action): \(record.description)",
+                    rawSource: "Charles Schwab"
+                ), nil)
+            }
+
+            // Case 2: Quantity is empty or zero → This is the "dividend income" part
+            // First try using the symbol from Symbol field, if empty then extract from description
+            var extractedSymbol = symbol.isEmpty ? "" : symbol
+            if extractedSymbol.isEmpty {
+                extractedSymbol = extractSymbolFromDescription(record.description)
+                print("[CASH_DEBUG] 🔍 Qual Div Reinvest (empty symbol): \(record.date) | Extracted: '\(extractedSymbol)' | Amount: \(record.amount)")
+            } else {
+                print("[CASH_DEBUG] 🔍 Qual Div Reinvest (has symbol, no quantity): \(record.date) | Symbol: '\(extractedSymbol)' | Amount: \(record.amount)")
+            }
+
+            guard !extractedSymbol.isEmpty else {
+                print("[CASH_DEBUG] ❌ Failed to extract symbol from: \(record.description)")
+                return (nil, nil)
+            }
+
+            let grossAmount = abs(amount)
+            guard grossAmount > 0 else { return (nil, nil) }
+
+            // Try to pair with tax record:
+            // 1. First try NRA Tax Adj (using ItemIssueId)
+            // 2. Then try W-8 WITHHOLDING (using "W8" as itemIssueId)
+            var taxAmount: Decimal = .zero
+            var taxSource = ""
+
+            // Try NRA Tax first (if ItemIssueId is available)
+            if !record.itemIssueId.isEmpty {
+                let nraKey = DividendTaxKey(
+                    date: record.date,
+                    symbol: extractedSymbol.uppercased(),
+                    itemIssueId: record.itemIssueId
+                )
+
+                if let taxEntry = taxRecords[nraKey], !pairedTaxIndices.contains(taxEntry.index) {
+                    taxAmount = abs(parseAmount(taxEntry.record.amount))
+                    pairedTaxIndices.insert(taxEntry.index)
+                    taxSource = "NRA Tax"
+                    print("[CASH_DEBUG] ✓ Paired NRA Tax: \(extractedSymbol) | ItemIssueId: \(record.itemIssueId) | Tax: \(taxAmount)")
+                }
+            }
+
+            // If no NRA Tax found, try W-8
+            if taxAmount == 0 {
+                let w8Key = "\(record.date)|\(extractedSymbol.uppercased())"
+
+                if let taxEntries = w8TaxRecords[w8Key] {
+                    // Find the best matching tax record by amount
+                    // Expected tax = grossAmount * taxRate (usually 30%)
+                    // Find the tax record with amount closest to expected
+                    var bestMatch: (index: Int, record: CharlesSchwabRawTransaction, diff: Decimal)?
+
+                    for taxEntry in taxEntries {
+                        guard !pairedTaxIndices.contains(taxEntry.index) else { continue }
+
+                        let taxAmt = abs(parseAmount(taxEntry.record.amount))
+                        // Calculate difference from expected (30% tax rate)
+                        let expectedTax = grossAmount * Decimal(0.30)
+                        let diff = abs(taxAmt - expectedTax)
+
+                        if bestMatch == nil || diff < bestMatch!.diff {
+                            bestMatch = (taxEntry.index, taxEntry.record, diff)
+                        }
+                    }
+
+                    if let match = bestMatch {
+                        taxAmount = abs(parseAmount(match.record.amount))
+                        pairedTaxIndices.insert(match.index)
+                        taxSource = "W-8"
+                        print("[CASH_DEBUG] ✓ Paired W-8 tax: \(extractedSymbol) | Gross: \(grossAmount) | Tax: \(taxAmount) | Match diff: \(match.diff)")
+                    } else {
+                        print("[CASH_DEBUG] ⚠️ No tax paired for: \(extractedSymbol) (all W-8 taxes already paired)")
+                    }
+                } else {
+                    print("[CASH_DEBUG] ⚠️ No tax paired for: \(extractedSymbol) (no W-8 tax found)")
+                }
+            }
+
+            let dividendInfo = DividendInfo(
+                type: .qualified,
+                grossAmount: grossAmount,
+                taxWithheld: taxAmount,
+                issueId: nil
+            )
+
+            print("[CASH_DEBUG] ✓ Qual Div Reinvest → Dividend: \(extractedSymbol) | Gross: \(grossAmount) | Tax: \(taxAmount) | Net: \(dividendInfo.netAmount)")
 
             return (ParsedTrade(
-                type: .dividendReinvest,
-                ticker: symbol.uppercased(),
-                quantity: abs(quantity),
-                price: price,
-                totalAmount: amount,  // Keep original sign
+                type: .dividend,
+                ticker: extractedSymbol.uppercased(),
+                quantity: .zero,
+                price: .zero,
+                totalAmount: dividendInfo.netAmount,  // Net amount (gross - tax)
                 tradeDate: parsedDate,
                 optionInfo: nil,
+                dividendInfo: dividendInfo,
+                feeInfo: nil,
                 note: "\(record.action): \(record.description)",
                 rawSource: "Charles Schwab"
             ), nil)

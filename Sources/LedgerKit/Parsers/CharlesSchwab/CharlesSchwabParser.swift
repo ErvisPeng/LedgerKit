@@ -116,7 +116,6 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
 
         // Step 3: First pass - Process Qual Div Reinvest to pair with taxes
         // This must be done first to mark all paired tax indices before processing W-8 records
-        print("[CASH_DEBUG] 🔄 First pass: Processing Qual Div Reinvest for tax pairing...")
         for (index, record) in records.enumerated() {
             // Parse action type
             guard let actionType = CharlesSchwabActionType(rawAction: record.action) else {
@@ -138,7 +137,6 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             }
         }
 
-        print("[CASH_DEBUG] 🔄 Second pass: Processing all other records...")
         // Step 4: Second pass - Process all other records (skipping Qual Div Reinvest and paired taxes)
         for (index, record) in records.enumerated() {
             // Skip NRA Tax Adj - will be paired with dividends
@@ -150,10 +148,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             if record.action == "Journaled Shares" &&
                record.description.uppercased().contains("W-8 WITHHOLDING") {
                 if pairedTaxIndices.contains(index) {
-                    print("[CASH_DEBUG] ⏭️ Skipping paired W-8 tax: \(record.date) | \(record.amount)")
                     continue
-                } else {
-                    print("[CASH_DEBUG] ⚠️ W-8 tax NOT paired, will process: \(record.date) | \(record.amount)")
                 }
             }
 
@@ -203,7 +198,6 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             }
 
             // This NRA Tax Adj was not paired with a dividend - record as standalone
-            print("[CASH_DEBUG] ⚠️ Unpaired NRA Tax: \(record.date) | \(record.symbol) | \(record.amount)")
             guard let parsedDate = parseDate(record.date) else { continue }
             let amount = parseAmount(record.amount)
             guard abs(amount) > 0 else { continue }
@@ -223,13 +217,6 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
         }
 
         // Debug: Print parsing summary
-        print("[CASH_DEBUG] ═══════════════════════════════════════════")
-        print("[CASH_DEBUG] 📊 Parsing Summary:")
-        print("[CASH_DEBUG] Total records: \(records.count)")
-        print("[CASH_DEBUG] Parsed trades: \(trades.count)")
-        print("[CASH_DEBUG] Paired W-8 taxes: \(pairedTaxIndices.count)")
-        print("[CASH_DEBUG] Warnings: \(warnings.count)")
-        print("[CASH_DEBUG] ═══════════════════════════════════════════")
 
         // Sort by trade date (oldest first), buys before sells on same day
         let sortedTrades = trades.sorted { trade1, trade2 in
@@ -960,13 +947,9 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             var extractedSymbol = symbol.isEmpty ? "" : symbol
             if extractedSymbol.isEmpty {
                 extractedSymbol = extractSymbolFromDescription(record.description)
-                print("[CASH_DEBUG] 🔍 Qual Div Reinvest (empty symbol): \(record.date) | Extracted: '\(extractedSymbol)' | Amount: \(record.amount)")
-            } else {
-                print("[CASH_DEBUG] 🔍 Qual Div Reinvest (has symbol, no quantity): \(record.date) | Symbol: '\(extractedSymbol)' | Amount: \(record.amount)")
             }
 
             guard !extractedSymbol.isEmpty else {
-                print("[CASH_DEBUG] ❌ Failed to extract symbol from: \(record.description)")
                 return (nil, nil)
             }
 
@@ -991,7 +974,6 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                     taxAmount = abs(parseAmount(taxEntry.record.amount))
                     pairedTaxIndices.insert(taxEntry.index)
                     taxSource = "NRA Tax"
-                    print("[CASH_DEBUG] ✓ Paired NRA Tax: \(extractedSymbol) | ItemIssueId: \(record.itemIssueId) | Tax: \(taxAmount)")
                 }
             }
 
@@ -1022,12 +1004,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                         taxAmount = abs(parseAmount(match.record.amount))
                         pairedTaxIndices.insert(match.index)
                         taxSource = "W-8"
-                        print("[CASH_DEBUG] ✓ Paired W-8 tax: \(extractedSymbol) | Gross: \(grossAmount) | Tax: \(taxAmount) | Match diff: \(match.diff)")
-                    } else {
-                        print("[CASH_DEBUG] ⚠️ No tax paired for: \(extractedSymbol) (all W-8 taxes already paired)")
                     }
-                } else {
-                    print("[CASH_DEBUG] ⚠️ No tax paired for: \(extractedSymbol) (no W-8 tax found)")
                 }
             }
 
@@ -1038,7 +1015,6 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 issueId: nil
             )
 
-            print("[CASH_DEBUG] ✓ Qual Div Reinvest → Dividend: \(extractedSymbol) | Gross: \(grossAmount) | Tax: \(taxAmount) | Net: \(dividendInfo.netAmount)")
 
             return (ParsedTrade(
                 type: .dividend,

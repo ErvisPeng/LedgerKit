@@ -6,7 +6,7 @@ import Foundation
 public struct CharlesSchwabTransactionFile: Codable, Sendable {
     public let fromDate: String
     public let toDate: String
-    public let totalTransactionsAmount: String
+    public let totalTransactionsAmount: String?
     public let brokerageTransactions: [CharlesSchwabRawTransaction]
 
     enum CodingKeys: String, CodingKey {
@@ -41,7 +41,7 @@ public struct CharlesSchwabRawTransaction: Codable, Sendable, Equatable {
     public let price: String
     public let feesAndComm: String
     public let amount: String
-    public let itemIssueId: String
+    public let itemIssueId: String?
     public let acctgRuleCd: String
 
     enum CodingKeys: String, CodingKey {

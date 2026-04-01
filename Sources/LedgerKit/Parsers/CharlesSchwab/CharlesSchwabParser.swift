@@ -237,7 +237,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
     private struct DividendTaxKey: Hashable {
         let date: String
         let symbol: String
-        let itemIssueId: String
+        let itemIssueId: String?
     }
 
     /// Build lookup map for NRA Tax Adj records
@@ -332,7 +332,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             type: dividendType,
             grossAmount: grossAmount,
             taxWithheld: taxAmount,
-            issueId: record.itemIssueId.isEmpty ? nil : record.itemIssueId
+            issueId: (record.itemIssueId?.isEmpty == true) ? nil : record.itemIssueId
         )
 
         return ParsedTrade(
@@ -616,7 +616,7 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
                 type: dividendType,
                 grossAmount: dividendAmount,
                 taxWithheld: .zero,
-                issueId: record.itemIssueId.isEmpty ? nil : record.itemIssueId
+                issueId: (record.itemIssueId?.isEmpty == true) ? nil : record.itemIssueId
             )
 
             return (ParsedTrade(
@@ -886,6 +886,23 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             ), nil)
         }
 
+        // Margin Interest
+        if actionType == .marginInterest {
+            guard abs(amount) > 0 else { return (nil, nil) }
+
+            return (ParsedTrade(
+                type: .fee,
+                ticker: "",
+                quantity: 0,
+                price: 0,
+                totalAmount: amount,  // Keep original sign (negative for expense)
+                tradeDate: parsedDate,
+                optionInfo: nil,
+                note: "\(record.action): \(record.description)",
+                rawSource: "Charles Schwab"
+            ), nil)
+        }
+
         // Journal - Other: FOREIGN WITHHOLDING (tax withholding from foreign dividends)
         // These have CUSIP in symbol field and description like "FOREIGN WITHHOLDING 31046423609"
         if actionType == .journalOther {
@@ -963,7 +980,8 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
             var taxSource = ""
 
             // Try NRA Tax first (if ItemIssueId is available)
-            if !record.itemIssueId.isEmpty {
+            if let itemIssueId = record.itemIssueId,
+               !itemIssueId.isEmpty {
                 let nraKey = DividendTaxKey(
                     date: record.date,
                     symbol: extractedSymbol.uppercased(),
@@ -1171,8 +1189,9 @@ public final class CharlesSchwabParser: BrokerParser, Sendable {
 
     /// Parse quantity string.
     private func parseQuantity(_ quantityString: String) -> Decimal {
-        let trimmed = quantityString.trimmingCharacters(in: .whitespaces)
-        return Decimal(string: trimmed) ?? .zero
+        var cleaned = quantityString.trimmingCharacters(in: .whitespaces)
+        cleaned = cleaned.replacingOccurrences(of: ",", with: "")
+        return Decimal(string: cleaned) ?? .zero
     }
 
     /// Parse amount string (remove $ and commas).
